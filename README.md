@@ -89,7 +89,7 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 This project is licensed under the MIT License.
 See the [LICENSE](LICENSE) file for full details.
 
-Copyright (c) 2026 FreeRunnerX10
+Copyright © 2026 Freerunnerx10
 
 ## Acknowledgements
 
