@@ -1,0 +1,15 @@
+# Node / Electron
+node_modules/
+dist/
+build/
+
+# Rust
+native-backend/target/
+
+# Design source files (keep outputs/exports, skip raw project files)
+resources/*.psd
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db

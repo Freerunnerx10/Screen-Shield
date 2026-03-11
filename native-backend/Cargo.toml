@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["injector", "payload"]
+
+# ---------------------------------------------------------------------------
+# Release profile — applied to both workspace members.
+# strip:          removes the symbol table from the final binary; reduces size
+#                 and eliminates internal symbol strings that AV heuristics key on.
+# lto:            link-time optimisation merges all codegen units before linking,
+#                 removing dead code and producing a leaner, harder-to-fingerprint
+#                 binary.
+# codegen-units:  forcing a single codegen unit gives LLVM full visibility
+#                 across the crate for better inlining and dead-code elimination.
+# ---------------------------------------------------------------------------
+[profile.release]
+strip         = "symbols"
+lto           = "thin"
+codegen-units = 1

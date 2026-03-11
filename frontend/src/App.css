@@ -1,0 +1,576 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── App panels body ──────────────────────────────────────── */
+.app-panels {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Flat sections — no card borders ─────────────────────── */
+.panel {
+  overflow: hidden;
+}
+
+.panel-preview {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--hidden-border);
+}
+
+.panel-apps {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Panel header row ─────────────────────────────────────── */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  flex-shrink: 0;
+}
+
+.panel-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.panel-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Refresh button ───────────────────────────────────────── */
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.refresh-btn:hover {
+  color: var(--text);
+  border-color: var(--accent-hover);
+  background: var(--hidden-bg);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.refresh-btn-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ── Error bar ────────────────────────────────────────────── */
+.error-bar {
+  margin: 0 12px 6px;
+  padding: 8px 12px;
+  background: rgba(255, 0, 0, 0.12);
+  border: 1px solid rgba(255, 0, 0, 0.35);
+  border-radius: var(--radius);
+  color: #ff4444;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* ── Elevation warning ────────────────────────────────────── */
+.elevation-warn {
+  flex-shrink: 0;
+  width: 100%;
+  padding: 8px 16px;
+  background: rgba(255, 0, 0, 0.10);
+  border-bottom: 1px solid rgba(255, 0, 0, 0.30);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.elevation-warn-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffdddd;
+}
+
+.elevation-warn-body {
+  font-size: 12px;
+  color: #d0b0b0;
+  line-height: 1.4;
+}
+
+/* ── Advanced Settings panel ──────────────────────────────── */
+.advanced-panel {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+
+.advanced-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: color 0.12s;
+}
+
+.advanced-header:hover {
+  color: var(--text);
+}
+
+.advanced-chevron {
+  width: 10px;
+  height: 10px;
+  display: block;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.advanced-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
+  padding: 2px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.advanced-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.advanced-option input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin-top: 1px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.advanced-option-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+  line-height: 1.4;
+}
+
+.advanced-option.is-disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.advanced-option.is-disabled input {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Settings cog button (top-right of preview header) ───── */
+.settings-cog-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, background 0.12s;
+}
+
+.settings-cog-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.settings-cog-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+/* ── Settings overlay — full-app backdrop ────────────────── */
+.settings-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(3px);
+}
+
+/* ── Settings panel card ─────────────────────────────────── */
+.settings-panel {
+  width: 310px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+
+.settings-close-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, background 0.12s;
+}
+
+.settings-close-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-close-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.settings-body {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+/* ── Theme option buttons ────────────────────────────────── */
+.theme-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.theme-option-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+  color: var(--text);
+}
+
+.theme-option-btn:hover {
+  background: var(--surface-hover);
+}
+
+.theme-option-btn.active {
+  border-color: var(--accent);
+  background: var(--hidden-bg);
+}
+
+.theme-option-swatch {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+/* Swatch colours per theme */
+.theme-swatch-default { background: radial-gradient(circle at 35% 35%, #333 40%, #080808 100%); border-color: #ff0000; }
+.theme-swatch-dark    { background: radial-gradient(circle at 35% 35%, #3a3a3a 40%, #1e1e1e 100%); border-color: #569cd6; }
+.theme-swatch-light   { background: radial-gradient(circle at 35% 35%, #fff 40%, #f0f0f0 100%); border-color: #0060c7; }
+.theme-swatch-system  { background: conic-gradient(#1e1e1e 0deg 180deg, #f0f0f0 180deg 360deg); border-color: #888; }
+
+.theme-option-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.theme-option-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-option-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.theme-option-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+/* ── Settings startup section ────────────────────────────── */
+.settings-startup-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-toggle-checkbox {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.settings-toggle-text {
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ── Settings reset section ──────────────────────────────── */
+.settings-reset-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-reset-btn {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 5px 10px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.settings-reset-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.settings-reset-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* ── First-launch setup overlay ──────────────────────────── */
+.setup-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  backdrop-filter: blur(8px);
+}
+
+.setup-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 24px 32px;
+  width: 100%;
+  max-width: 340px;
+  background: #0c0c0c;
+  border-radius: 14px;
+  border: 1px solid #1e1e1e;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+}
+
+.setup-logo {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+}
+
+.setup-brand {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: #ffffff;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+.setup-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #e8e8e8);
+  margin-top: 8px;
+}
+
+.setup-sub {
+  font-size: 11px;
+  color: var(--text-muted, #b8b8b8);
+  text-align: center;
+  margin-top: -4px;
+  margin-bottom: 4px;
+}
+
+/* ── Setup theme grid ────────────────────────────────────── */
+.setup-theme-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.setup-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: #111111;
+  border: 1px solid #252525;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+  color: #e8e8e8;
+}
+
+.setup-theme-btn:hover {
+  background: #1a1a1a;
+}
+
+.setup-theme-btn.active {
+  border-color: var(--accent);
+  background: var(--hidden-bg);
+}
+
+.setup-theme-btn-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.setup-theme-btn-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e8e8e8;
+}
+
+.setup-theme-btn-desc {
+  font-size: 10px;
+  color: #b8b8b8;
+}
+
+/* ── Get Started button ──────────────────────────────────── */
+.setup-get-started-btn {
+  margin-top: 8px;
+  width: 100%;
+  padding: 10px 0;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.setup-get-started-btn:hover {
+  background: var(--accent-hover);
+}

@@ -1,0 +1,91 @@
+name: Build App
+
+on: [push]
+
+jobs:
+  build32:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build project
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo build -p payload --release --target i686-pc-windows-msvc
+
+      - name: Rename 32-bit dll
+        shell: powershell
+        run: Rename-Item -Path .\target\i686-pc-windows-msvc\release\utils.dll -NewName utils32.dll
+
+      - name: Upload ${{ matrix.target }} artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86-binaries
+          path: target/i686-pc-windows-msvc/release/utils32.dll
+          if-no-files-found: error
+
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Upload built binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: x64-binaries
+          path: |
+            target/release/*.exe
+            target/release/*.dll
+          if-no-files-found: error
+
+  release:
+    runs-on: windows-latest
+    needs: [build, build32]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "*-binaries"
+          path: dist
+          merge-multiple: true
+
+      - name: Generate zip bundle
+        run: 7z a -tzip Invisiwind.zip .\hide.ahk .\dist\*.dll .\dist\*.exe
+
+      - name: Install InnoSetup
+        shell: cmd
+        run: choco upgrade innosetup -y --no-progress
+
+      - name: Build Installer
+        run: iscc .\Misc\inno.iss
+
+      - name: Publish latest pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            Invisiwind.zip
+            Misc/Output/InvisiwindInstaller.exe
+
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Publish tagged release
+        uses: softprops/action-gh-release@v2
+        with:
+          make_latest: true
+          generate_release_notes: true
+          files: |
+            Invisiwind.zip
+            Misc/Output/InvisiwindInstaller.exe

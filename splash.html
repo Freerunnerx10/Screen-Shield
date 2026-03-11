@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--splash-bg, #0a0a0a);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      opacity: 1;
+      transition: opacity 0.6s ease;
+      transform: translateY(-18px);
+    }
+    .container.fade-out { opacity: 0; }
+    .logo {
+      width: 140px;
+      height: 140px;
+      object-fit: contain;
+      filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
+      margin-bottom: 12px;
+    }
+    .title {
+      color: var(--splash-color, #ffffff);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin-bottom: 28px;
+    }
+    .spinner {
+      width: 22px;
+      height: 22px;
+      border: 2.5px solid var(--splash-muted, #555555);
+      border-top-color: var(--splash-color, #ffffff);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .copyright {
+      position: absolute;
+      bottom: 14px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 11px;
+      color: var(--splash-muted, #555555);
+      letter-spacing: 0.3px;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="c">
+    <img class="logo" id="logo" alt="Screen Shield" />
+    <span class="title">Screen Shield</span>
+    <div class="spinner"></div>
+  </div>
+  <p class="copyright">© 2026 Freerunnerx10</p>
+  <script>
+    // Apply theme from query param — passed by main.js from ss-config.json
+    ;(function() {
+      var params = new URLSearchParams(location.search)
+      var theme = params.get('theme') || 'default'
+      var isDark = params.get('isDark') !== '0'
+      var themes = {
+        'default': { bg: '#0a0a0a', color: '#ffffff', muted: '#555555' },
+        'dark':    { bg: '#1e1e1e', color: '#d4d4d4', muted: '#666666' },
+        'light':   { bg: '#f0f0f0', color: '#1a1a1a', muted: '#888888' },
+      }
+      var systemTheme = isDark
+        ? { bg: '#202020', color: '#e0e0e0', muted: '#666666' }
+        : { bg: '#f3f3f3', color: '#1a1a1a', muted: '#888888' }
+      var t = theme === 'system' ? systemTheme : (themes[theme] || themes['default'])
+      var root = document.documentElement
+      root.style.setProperty('--splash-bg', t.bg)
+      root.style.setProperty('--splash-color', t.color)
+      root.style.setProperty('--splash-muted', t.muted)
+    })()
+
+    document.getElementById('logo').src = window.splashAPI.getLogoSrc()
+
+    // Wait for main.js to signal that initialisation is complete before
+    // fading out.  The hardcoded 2500 ms timer was removed because backend
+    // init (Defender exclusions + process start) can exceed that timeout,
+    // causing the logo/title/spinner to vanish before the main window is ready.
+    window.splashAPI.onClose(function() {
+      document.getElementById('c').classList.add('fade-out')
+      setTimeout(function() { window.close() }, 600)
+    })
+  </script>
+</body>
+</html>

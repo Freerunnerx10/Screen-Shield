@@ -1,0 +1,177 @@
+/* ── Preview pane wrapper ─────────────────────────────────── */
+.preview-pane {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+}
+
+/* ── Monitor selector bar ────────────────────────────────── */
+.preview-screen-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.preview-screen-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.preview-screen-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+.screen-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.screen-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.screen-btn.active {
+  background: var(--hidden-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Live capture frame ──────────────────────────────────── */
+.preview-container {
+  position: relative;
+  width: 100%;
+  /* 16:9 aspect ratio — height is derived from width, fills the full container */
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  border: 2px solid var(--accent);
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.preview-video {
+  width: 100%;
+  height: 100%;
+  /* cover: fills the frame completely — no black letterbox bars.
+     Any black you see is a real hidden window in the GPU capture, not CSS padding. */
+  object-fit: cover;
+  display: block;
+}
+
+/* ── Placeholder when no source is active ────────────────── */
+.preview-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* ── LIVE badge overlaid on top-right of the video ───────── */
+.preview-live-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.preview-live-badge.is-paused {
+  background: rgba(100, 100, 100, 0.88);
+}
+
+/* ── Play / pause overlay button ─────────────────────────── */
+.preview-play-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s, background 0.12s;
+  padding: 0;
+  backdrop-filter: blur(2px);
+}
+
+.preview-play-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Show on hover */
+.preview-container:hover .preview-play-btn {
+  opacity: 1;
+}
+
+/* Always visible when paused */
+.preview-play-btn.is-paused {
+  opacity: 1;
+}
+
+.preview-play-btn:hover {
+  background: rgba(0, 0, 0, 0.80);
+}
+
+/* ── Caption row below the preview frame ─────────────────── */
+.preview-caption {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 0 2px;
+}
+
+.preview-caption-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}

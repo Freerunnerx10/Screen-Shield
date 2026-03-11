@@ -1,0 +1,97 @@
+{
+  "name": "screen-shield",
+  "version": "1.0.0",
+  "description": "Hide windows from screen capture",
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently -k -n Vite,Electron -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build && electron-builder --win",
+    "build:dir": "vite build && electron-builder --dir",
+    "preview": "vite preview"
+  },
+  "author": {
+    "name": "Freerunnerx10",
+    "url": "https://github.com/Freerunnerx10"
+  },
+  "homepage": "https://github.com/Freerunnerx10/Screen-Shield",
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^34.3.0",
+    "electron-builder": "^25.1.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vite": "^6.2.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.screenshield.app",
+    "productName": "Screen Shield",
+    "copyright": "Copyright © 2026 Freerunnerx10",
+    "asar": true,
+    "directories": {
+      "output": "build"
+    },
+    "files": [
+      "dist/**",
+      "main.js",
+      "preload.js",
+      "preload-splash.js",
+      "splash.html"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ScreenShield.ico",
+        "to": "ScreenShield.ico"
+      },
+      {
+        "from": "resources/ScreenShield- Logo (NoBorder).png",
+        "to": "ScreenShield- Logo (NoBorder).png"
+      },
+      {
+        "from": "resources/ScreenShield Splash Video 1.mp4",
+        "to": "ScreenShield Splash Video 1.mp4"
+      },
+      {
+        "from": "native-backend/target/release/ScreenShieldHelper.exe",
+        "to": "ScreenShieldHelper.exe"
+      },
+      {
+        "from": "native-backend/target/release/ScreenShieldHook.dll",
+        "to": "ScreenShieldHook.dll"
+      },
+      {
+        "from": "native-backend/Misc/invicon.ico",
+        "to": "invicon.ico"
+      }
+    ],
+    "win": {
+      "signtoolOptions": {
+        "publisherName": "Freerunnerx10"
+      },
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "resources/ScreenShield.ico",
+      "executableName": "Screen Shield"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "resources/ScreenShield.ico",
+      "uninstallerIcon": "resources/ScreenShield.ico",
+      "installerSidebar": "resources/installer-sidebar.bmp",
+      "createDesktopShortcut": "always",
+      "shortcutName": "Screen Shield",
+      "artifactName": "ScreenShield-Setup-${version}.exe",
+      "include": "installer.nsh"
+    },
+    "portable": {
+      "artifactName": "ScreenShield-Portable-${version}.exe"
+    }
+  }
+}

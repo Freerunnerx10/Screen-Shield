@@ -1,0 +1,102 @@
+.status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  /* Slide in from the bottom when it first appears */
+  animation: status-bar-in 0.2s ease-out;
+}
+
+.status-bar.status-bar-idle {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+@keyframes status-bar-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Pulsing dot — mirrors the LIVE badge in PreviewPane for visual consistency */
+.status-bar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
+  animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+
+.status-bar-idle .status-bar-dot {
+  background: var(--text-muted);
+  animation: none;
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.85); }
+}
+
+.status-bar-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-bar-count {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar-sub {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Small inline pills that appear next to the count when advanced options are on */
+.status-bar-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  vertical-align: middle;
+}
+
+/* ── Light theme overrides ───────────────────────────────── */
+/* Solid accent background is too aggressive on a light UI — use a tinted
+   surface with accent-coloured text instead.                              */
+[data-theme="light"] .status-bar:not(.status-bar-idle) {
+  background: var(--hidden-bg);
+  color: var(--accent);
+  border-top: 1px solid var(--hidden-border);
+}
+
+[data-theme="light"] .status-bar:not(.status-bar-idle) .status-bar-dot {
+  background: var(--accent);
+}
+
+[data-theme="light"] .status-bar:not(.status-bar-idle) .status-bar-badge {
+  background: var(--hidden-border);
+  color: var(--accent);
+}

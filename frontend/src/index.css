@@ -1,0 +1,75 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:            #080808;
+  --surface:       #111111;
+  --surface-hover: #1a1a1a;
+  --border:        #252525;
+  --accent:        #ff0000;
+  --accent-hover:  #cc0000;
+  --text:          #e8e8e8;
+  --text-muted:    #b8b8b8;
+  --hidden-bg:     rgba(255, 0, 0, 0.12);
+  --hidden-border: rgba(255, 0, 0, 0.45);
+  --radius:        8px;
+}
+
+/* ── Dark theme (VS Code-style neutral dark, blue accent) ── */
+[data-theme="dark"] {
+  --bg:            #1e1e1e;
+  --surface:       #252526;
+  --surface-hover: #2d2d2e;
+  --border:        #404040;
+  --accent:        #569cd6;
+  --accent-hover:  #4090c0;
+  --text:          #d4d4d4;
+  --text-muted:    #888888;
+  --hidden-bg:     rgba(86, 156, 214, 0.12);
+  --hidden-border: rgba(86, 156, 214, 0.45);
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --bg:            #f0f0f0;
+  --surface:       #ffffff;
+  --surface-hover: #e8e8e8;
+  --border:        #d0d0d0;
+  --accent:        #0060c7;
+  --accent-hover:  #004ea3;
+  --text:          #1a1a1a;
+  --text-muted:    #555555;
+  --hidden-bg:     rgba(0, 96, 199, 0.08);
+  --hidden-border: rgba(0, 96, 199, 0.35);
+}
+
+html {
+  /* Establish a consistent root font size so 1rem = 13px everywhere, matching
+     the body. Without this Chromium's default 16px root size creates a mismatch
+     if any stylesheet ever uses rem units. */
+  font-size: 13px;
+  /* Prevent Chromium from overriding the cursor with IDC_APPSTARTING during
+     IPC round-trips. Chromium respects an explicit (non-auto) CSS cursor value
+     over its own loading-state override, so declaring cursor: default here
+     stops the spinning-circle from appearing during background polls. */
+  cursor: default;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}

@@ -1,0 +1,35 @@
+[package]
+name = "injector"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.49", features = ["derive"] }
+crossbeam-channel = "0.5.15"
+dll-syringe = { version = "0.17.0", features = ["into-x86-from-x64", "rpc-raw"] }
+eframe = { version = "0.33.0", features = ["wgpu"] }
+egui_extras = "0.33.0"
+image = { version = "0.25.8", default-features = false, features = ["ico", "png"]}
+windows = { version = "0.62.2", features = [
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Shell",
+  "Win32_UI_Accessibility",
+  "Win32_Graphics_Dwm",
+  "Win32_System_Console",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Diagnostics_Etw",
+  "Win32_System_Time",
+] }
+windows-capture = { version = "2.0.0-alpha.7" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[build-dependencies]
+winresource = "0.1.23"
+
+[[bin]]
+name = "ScreenShieldHelper"
+path = "src/main.rs"
