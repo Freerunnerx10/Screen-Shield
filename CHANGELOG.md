@@ -5,6 +5,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.0] - 2026-04-01
+### Added
+- **Removed glow effect from preview window** (`frontend/src/PreviewPane.jsx`, `frontend/src/PreviewPane.css`) — removed the soft glow around the preview container that reflected the dominant color of the selected screen/window. The glow used CSS variables for dynamic color updates and defaulted to red as fallback. Performance optimized to only update when selection changes.
+
+## [1.1.0] - 2026-03-28
+ 
+### Improved
+- **Preview memory usage** (`frontend/src/PreviewPane.jsx`) — the preview pane now stops the desktop capture stream when paused, saving ~10–20 MB of GPU memory. Previously, pausing only stopped video decoding but kept the MediaStream tracks allocated. The stream is automatically restarted when the user resumes the preview.
+- **Icon extraction performance** (`native-backend/injector/src/native.rs`) — added a global icon cache that maps process IDs to icon data URLs, avoiding repeated icon extraction on every background poll. Icons are stable for the lifetime of a process, so caching them is safe and reduces CPU usage during the 2-second polling cycle.
+- **Startup task username handling** (`main.js`) — the username parameter in the `schtasks` command is now quoted to handle Windows usernames that contain spaces, preventing task creation failures in edge cases.
+ 
+### Fixed
+- **Window restore on quit** (`main.js`) — when quitting the app via system tray, all previously hidden windows are now automatically restored before application exit. This ensures no windows remain hidden after the app closes, eliminating the need for users to manually restore windows or restart applications.
+ 
+---
+
+## [1.1.0] - 2026-03-21
+ 
+### Changed
+- **Control Panel metadata** (`installer.nsh`) — updated Windows Add/Remove Programs information link:
+  - Update/Information link corrected to point to `/releases/latest` instead of `/releases`
+- **Task Manager process naming** — updated Windows Task Manager display names for consistency and clarity:
+  - Main GUI process: already displays as "Screen Shield" (unchanged)
+  - Helper process FileDescription updated from "ScreenShield Privacy Utility" to "Screen Shield - Window Privacy Protector" in PE resources (`native-backend/injector/build.rs`)
+  - Hook DLL FileDescription updated from "ScreenShield Privacy Utility" to "Screen Shield - Window Privacy Hook" in PE resources (`native-backend/payload/build.rs`)
+  - Portable artifact name updated from "ScreenShield-Portable-{version}.exe" to "Screen Shield Portable-{version}.exe" (`package.json`)
+   - Application description updated from "Protect window privacy from screen capture" to "ScreenShield" (`package.json`)
+    - Documentation title updated to remove legacy "Hide Windows from Screen Capture" phrase (`docs/index.html`)
+- **Hidden Applications list sorting** (`frontend/src/WindowList.jsx`) — improved how apps are displayed in the Hidden Applications list:
+  - Apps are now displayed in two groups: hidden apps (or apps with hidden windows) at the top, followed by visible apps
+  - Both groups are sorted alphabetically A-Z
+  - Hidden apps remain visible in the list even when minimized or closed to system tray
+  - Apps are only removed from the list when all windows are unhidden AND the process is fully closed
+  - No additional toggles, filters, or checkboxes were introduced
+ 
+### Fixed
+- **Installed version not prompting for UAC** (`package.json`) — the NSIS installer configuration was missing the `requestExecutionLevel` setting, causing the installed executable to not embed the `requireAdministrator` manifest. Added `"requestExecutionLevel": "admin"` to the NSIS configuration to ensure both portable and installed versions always prompt for UAC when launched.
+  - **Root cause:** The portable version had `"requestExecutionLevel": "admin"` configured, but the NSIS installer configuration did not, causing electron-builder to not embed the `requireAdministrator` manifest in the installed executable
+  - **Fix:** Added `"requestExecutionLevel": "admin"` to the `nsis` configuration block in [`package.json`](package.json:82-93)
+  - **Primary enforcement:** The app manifest ([`app.manifest`](app.manifest:19)) already had `<requestedExecutionLevel level="requireAdministrator" uiAccess="false" />` configured correctly, which now applies to both portable and installed builds
+  - **Secondary fallback:** The runtime elevation check in [`main.js`](main.js:108-125) detects non-admin launches and re-invokes the app with elevated privileges using the "runas" verb, with a `--elevated` flag to prevent infinite relaunch loops
+  - **Installer verification:** Confirmed [`installer.nsh`](installer.nsh) only adds Microsoft Defender exclusions and does not override or suppress the manifest
+  - **Impact:** All launch paths (desktop shortcut, Start Menu shortcut, direct EXE launch, startup/boot launch) now consistently require administrator privileges
+  - **User experience:** If the user cancels the UAC prompt, the app exits gracefully with exit code 1
+- **Launch on Windows startup** (`main.js`) — replaced Electron's `app.setLoginItemSettings` with Windows Task Scheduler to enable elevated startup without UAC prompts.
+  - **Root cause:** Electron's startup mechanism doesn't support running with highest privileges, causing the startup feature to fail when administrator privileges are required for window protection
+  - **Fix:** Implemented custom startup handling using `schtasks` to create a scheduled task that runs at logon with highest privileges (`/RL HIGHEST`)
+  - **Details:**
+    - Added `createStartupTask()`, `removeStartupTask()`, and `checkStartupTaskExists()` functions
+    - Updated `set-launch-at-startup` IPC handler to create/remove scheduled tasks
+    - Updated `get-launch-at-startup` IPC handler to check task existence
+    - Task runs the installed executable directly with no additional arguments
+    - Only applies to packaged applications (development mode unaffected)
+  - **Impact:** ScreenShield now launches automatically at user login with administrator privileges, providing immediate window protection without requiring manual UAC confirmation
+- **Visual flicker during refresh** (`frontend/src/App.jsx`, `native-backend/injector/src/native.rs`) — fixed visual flicker when refreshing the Hidden Applications list:
+  - Removed unhideWindow calls during refresh that caused windows to briefly flash or become visible
+  - Added system window classes (MS_WebCheckMonitor, Progman, WorkerW, Shell_TrayWnd) to the exclusion list in the backend enumeration
+  - Added read-only enumeration using EnumWindows only (no state-changing APIs)
+  - Preserved window state during refresh (no unhide/rehide cycles)
+  - Added debounce/locking mechanism to prevent overlapping refresh calls
+  - Refresh operation is now completely silent and non-visual with no window flashing or redrawing
+
+---
+
 ## [1.00.25] - 2026-03-11
 
 ### Changed

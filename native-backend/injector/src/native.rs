@@ -51,6 +51,10 @@ use windows::{
     core::{BOOL, PWSTR},
 };
 
+/// Icon cache — maps PID to icon data URL to avoid repeated extraction on every poll.
+/// Icons are stable for the lifetime of a process, so caching them is safe.
+static ICON_CACHE: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
 #[derive(Debug, serde::Serialize)]
 pub struct WindowInfo {
     pub hwnd: u32,
@@ -62,6 +66,8 @@ pub struct WindowInfo {
     pub exe_path: String,
     pub process_name: String,
     pub icon_data_url: String,
+    /// Original icon data URL (for when app is hidden/minimized)
+    pub original_icon_data_url: String,
     /// true when the entry represents a running process with no visible window
     /// (e.g. minimised to the system tray).  hwnd is 0 for these entries.
     pub no_window: bool,
@@ -160,6 +166,26 @@ fn icon_b64_from_rgba(width: usize, height: usize, mut rgba: Vec<u8>) -> Option<
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
     Some(format!("data:image/png;base64,{}", base64_encode(buf.get_ref())))
+}
+
+/// Returns a default icon as a data URL (white "S" on red background).
+/// This is used as a fallback when no icon can be extracted from a window or executable.
+fn get_default_icon_data_url() -> String {
+    // 16x16 PNG: white "S" on red background
+    // This is a minimal valid PNG that represents the ScreenShield default icon
+    const DEFAULT_ICON_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00,
+        0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00,
+        0x00, 0x44, 0x45, 0x58, 0x54, 0x65, 0x78, 0x74, 0x00, 0x43, 0x72, 0x65,
+        0x61, 0x74, 0x65, 0x64, 0x20, 0x77, 0x69, 0x74, 0x68, 0x20, 0x47, 0x49,
+        0x4D, 0x50, 0x57, 0x81, 0x0E, 0x17, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44,
+        0x41, 0x54, 0x38, 0x4F, 0x63, 0x64, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00,
+        0x04, 0x00, 0x01, 0x39, 0x39, 0x6E, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    format!("data:image/png;base64,{}", base64_encode(DEFAULT_ICON_PNG))
 }
 
 #[tracing::instrument]
@@ -373,10 +399,13 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     } else {
         String::new()
     };
-    const EXCLUDED_CLASSES: &[&str] = &[
-        "NotifyIconOverflowWindow",
-        "WorkerW",
-    ];
+     const EXCLUDED_CLASSES: &[&str] = &[
+         "NotifyIconOverflowWindow",
+         "WorkerW",
+         "MS_WebCheckMonitor",
+         "Progman",
+         "Shell_TrayWnd",
+     ];
     if EXCLUDED_CLASSES.contains(&class_name.as_str()) {
         return TRUE;
     }
@@ -446,6 +475,7 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
         exe_path: String::new(),
         process_name: String::new(),
         icon_data_url: String::new(),
+        original_icon_data_url: String::new(),
         no_window: false,
     });
 
@@ -470,6 +500,8 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
     // Tracks exe paths for processes whose window HICON is dynamic (e.g. explorer.exe).
     // These are loaded via ExtractIconExW from the exe file to get the stable app icon.
     let mut pid_exe_for_icon: HashMap<u32, String> = HashMap::new();
+    // Cache for original icons to avoid repeated extraction
+    let mut pid_original_icon: HashMap<u32, String> = HashMap::new();
 
     // Processes whose window HICON is dynamically generated — skip icon fetch for these.
     // (Explorer's icon reflects the current folder thumbnail, not the app icon.)
@@ -493,6 +525,67 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
         }
     }
 
+    // Get current icons (may reflect hidden state) and original icons
+    for win in &mut top_level_windows {
+        // Get current icon from window (may be affected by hiding)
+        if let Some((width, height, pixels)) = get_icon(win.hwnd) {
+            if let Some(icon_url) = icon_b64_from_rgba(width, height, pixels) {
+                win.icon_data_url = icon_url;
+            }
+        }
+        
+        // Get original icon from executable (stable app icon)
+        let original_icon_url = if SKIP_ICON_PROCS.contains(&win.process_name.to_lowercase().as_str()) {
+            // For explorer.exe, get icon from exe file
+            if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
+                icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+                    // Fallback to default icon
+                    tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                    get_default_icon_data_url()
+                })
+            } else {
+                // Fallback to default icon
+                tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                get_default_icon_data_url()
+            }
+        } else {
+            // For other apps, try to get icon from window first, then fallback to exe
+            if let Some((width, height, pixels)) = get_icon(win.hwnd) {
+                if let Some(icon_url) = icon_b64_from_rgba(width, height, pixels) {
+                    icon_url
+                } else {
+                    // Fallback to exe icon
+                    if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
+                        icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+                            tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                            get_default_icon_data_url()
+                        })
+                    } else {
+                        tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                        get_default_icon_data_url()
+                    }
+                }
+            } else {
+                // Fallback to exe icon
+                if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
+                    icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+                        tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                        get_default_icon_data_url()
+                    })
+                } else {
+                    tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                    get_default_icon_data_url()
+                }
+            }
+        };
+        win.original_icon_data_url = original_icon_url;
+        
+        // If we haven't set a current icon yet, use the original
+        if win.icon_data_url.is_empty() {
+            win.icon_data_url = win.original_icon_data_url.clone();
+        }
+    }
+
     // Populate parent_pid for every window using a single ToolHelp snapshot.
     let parent_map = build_parent_pid_map();
     for win in &mut top_level_windows {
@@ -505,24 +598,51 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
     });
 
     // Fetch one icon per unique PID using the first window handle seen.
-    let mut pid_icon_cache: HashMap<u32, String> = HashMap::new();
+    // Use global cache to avoid repeated extraction on every poll.
+    let mut icon_cache = ICON_CACHE.lock().unwrap();
     for (&pid, &hwnd) in &pid_first_hwnd {
-        let url = get_icon(hwnd)
-            .and_then(|(w, h, rgba)| icon_b64_from_rgba(w, h, rgba))
-            .unwrap_or_default();
-        pid_icon_cache.insert(pid, url);
+        // Check cache first
+        if let Some(cached_url) = icon_cache.get(&pid) {
+            // Use cached icon
+            for win in top_level_windows.iter_mut().filter(|w| w.pid == pid) {
+                win.icon_data_url = cached_url.clone();
+            }
+        } else {
+            // Extract and cache
+            let url = get_icon(hwnd)
+                .and_then(|(w, h, rgba)| icon_b64_from_rgba(w, h, rgba))
+                .unwrap_or_default();
+            icon_cache.insert(pid, url.clone());
+            for win in top_level_windows.iter_mut().filter(|w| w.pid == pid) {
+                win.icon_data_url = url.clone();
+            }
+        }
     }
     // For processes with dynamic window icons, load from the exe file directly.
     for (&pid, exe_path) in &pid_exe_for_icon {
-        let url = get_icon_from_exe(exe_path)
-            .and_then(|(w, h, rgba)| icon_b64_from_rgba(w, h, rgba))
-            .unwrap_or_default();
-        pid_icon_cache.insert(pid, url);
+        // Check cache first
+        if let Some(cached_url) = icon_cache.get(&pid) {
+            for win in top_level_windows.iter_mut().filter(|w| w.pid == pid) {
+                win.icon_data_url = cached_url.clone();
+            }
+        } else {
+            // Extract and cache
+            let url = get_icon_from_exe(exe_path)
+                .and_then(|(w, h, rgba)| icon_b64_from_rgba(w, h, rgba))
+                .unwrap_or_default();
+            icon_cache.insert(pid, url.clone());
+            for win in top_level_windows.iter_mut().filter(|w| w.pid == pid) {
+                win.icon_data_url = url.clone();
+            }
+        }
     }
+    // Release the lock
+    drop(icon_cache);
 
     for win in &mut top_level_windows {
-        if let Some(url) = pid_icon_cache.get(&win.pid) {
-            win.icon_data_url = url.clone();
+        if win.icon_data_url.is_empty() {
+            // Fallback to default icon if still empty
+            win.icon_data_url = get_default_icon_data_url();
         }
     }
 
@@ -579,13 +699,22 @@ pub fn get_processes_by_name(names: &[&str], exclude_pids: &HashSet<u32>) -> Vec
                             pid,
                             parent_pid,
                             hidden: false, // lock state is applied by the frontend
-                            exe_path,
+                            exe_path: exe_path.clone(),
                             process_name: if process_name.is_empty() {
                                 exe_name
                             } else {
                                 process_name
                             },
                             icon_data_url: String::new(), // no HWND → no icon source
+                            original_icon_data_url: {
+                                // Extract the stable app icon from the executable file
+                                // so the UI can display it even when the app is minimized to tray.
+                                if let Some((width, height, pixels)) = get_icon_from_exe(&exe_path) {
+                                    icon_b64_from_rgba(width, height, pixels).unwrap_or_default()
+                                } else {
+                                    String::new()
+                                }
+                            },
                             no_window: true,
                         });
                     }

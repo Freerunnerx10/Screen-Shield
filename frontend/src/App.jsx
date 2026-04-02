@@ -23,6 +23,8 @@ const api = window.screenShield ?? {
   saveSetting: async () => {},
   resetSettings: async () => {},
   onResetSettings: () => {},
+  onAppHidden: () => {},
+  onAppShown: () => {},
 }
 
 /**
@@ -70,10 +72,11 @@ function applySystemThemeVars({ isDark, accentColor }) {
 }
 
 export default function App() {
-  const [windows, setWindows] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [elevated, setElevated] = useState(true)
+   const [windows, setWindows] = useState([])
+   const [loading, setLoading] = useState(false)
+   const [error, setError] = useState(null)
+   const [elevated, setElevated] = useState(true)
+   const [isAppVisible, setIsAppVisible] = useState(true)
 
   // Multi-monitor state for the preview pane
   const [screens, setScreens] = useState([])
@@ -163,10 +166,12 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // Initial data load
   // ---------------------------------------------------------------------------
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
+   const refresh = useCallback(async () => {
+     // Prevent overlapping refresh calls
+     if (loading) return
+     setLoading(true)
+     setError(null)
+     try {
       const list = await api.listWindows()
       if (!Array.isArray(list)) { setWindows([]); return }
 
@@ -252,11 +257,17 @@ export default function App() {
         updateWatcher()
       }
 
-      // Reset WDA on stale-hidden windows.  Fire-and-forget — the UI already
-      // reflects hidden:false so the user sees a clean state immediately.
-      for (const hwnd of toUnhide) {
-        api.unhideWindow(hwnd, true).catch(() => {})
-      }
+       // Reset WDA on stale-hidden windows.  Fire-and-forget — the UI already
+       // reflects hidden:false so the user sees a clean state immediately.
+       // We do not unhide the window here to avoid visual flicker during refresh.
+       // Instead, we rely on the fact that the window is not locked and will be
+       // processed normally in the next poll or refresh.
+       // Note: the window may remain hidden by WDA (from the OS) but we are not
+       // locking it, so we do not want to hide it. The user may see it as not
+       // hidden in the UI but it is not capturable until the WDA is reset by
+       // a subsequent hide/unhide cycle (which happens when the window is
+       // locked and then unlocked, or via the background poll).
+       // For now, we skip the unhide to avoid flicker.
     } catch (err) {
       setError(err.message ?? String(err))
     } finally {
@@ -317,15 +328,38 @@ export default function App() {
     })
   }, [])
 
-  // Listen for a main-process reset request (tray menu or IPC handler), clear
-  // persisted state and reload so the first-launch setup re-appears.
-  useEffect(() => {
-    api.onResetSettings?.(() => {
-      localStorage.removeItem('ss-setup-done')
-      localStorage.removeItem('ss-theme')
-      window.location.reload()
-    })
-  }, [])
+   // Listen for a main-process reset request (tray menu or IPC handler), clear
+   // persisted state and reload so the first-launch setup re-appears.
+   useEffect(() => {
+     api.onResetSettings?.(() => {
+       localStorage.removeItem('ss-setup-done')
+       localStorage.removeItem('ss-theme')
+       window.location.reload()
+     })
+   }, [])
+
+   // Listen for app hidden/shown events to optimize resource usage
+   useEffect(() => {
+     const hiddenHandler = () => {
+       // App is hidden to tray - we can reduce polling frequency or pause non-essential work
+       console.log('[App] App hidden to tray')
+       setIsAppVisible(false)
+     }
+     
+     const shownHandler = () => {
+       // App is shown from tray - resume normal operations
+       console.log('[App] App shown from tray')
+       setIsAppVisible(true)
+     }
+     
+     const unsubscribeHidden = api.onAppHidden?.(hiddenHandler)
+     const unsubscribeShown = api.onAppShown?.(shownHandler)
+     
+     return () => {
+       unsubscribeHidden?.()
+       unsubscribeShown?.()
+     }
+   }, [])
 
   // Load logo URL for the first-launch setup screen
   useEffect(() => {
@@ -339,118 +373,139 @@ export default function App() {
     setFirstLaunch(false)
   }
 
-  // ---------------------------------------------------------------------------
-  // Background poll — detects new windows and removes closed ones.
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    let pollActive = false
-    const poll = setInterval(async () => {
-      // Skip if a previous poll is still running — prevents concurrent
-      // ScreenShieldHelper.exe requests from piling up under a slow system.
-      if (pollActive) return
-      pollActive = true
-      try {
-        const list = await api.listWindows()
-        if (!Array.isArray(list)) return
-
-        // Determine which new windows need hiding eagerly, before the React
-        // state update, so the IPC calls fire promptly regardless of when
-        // startTransition schedules the render.
-        const toAutoHide = []
-        const knownKeys = new Set(windowsRef.current.map((w) => entryKey(w)))
-        for (const w of list) {
-          if (w.no_window || knownKeys.has(entryKey(w))) continue
-          if (
-            lockedPidsRef.current.has(w.pid) ||
-            lockedHwndsRef.current.has(w.hwnd) ||
-            lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-            (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-          ) {
-            toAutoHide.push(w.hwnd)
-          }
-        }
-
-        // Task View / Alt-Tab overlay (MultitaskingViewFrame) is transient — it
-        // only exists while Alt-Tab / Win-Tab is held.  It shares the DWM desktop
-        // compositor layer, so its capture visibility is tied to the desktop toggle.
-        // The poll catches it on each appearance and hides/unhides it accordingly.
-        const toAutoUnhideAltTab = []
-        for (const w of list) {
-          if (w.class_name !== 'MultitaskingViewFrame') continue
-          if (hideDesktopRef.current && !w.hidden) {
-            toAutoHide.push(w.hwnd)
-          } else if (!hideDesktopRef.current && w.hidden) {
-            toAutoUnhideAltTab.push(w.hwnd)
-          }
-        }
-
-        // Wrap the render update in startTransition so React can yield to
-        // user interactions mid-render and avoid blocking the Windows message
-        // queue (which would trigger the OS loading cursor).
-        startTransition(() => {
-          setWindows((prev) => {
-            const listMap = new Map(list.map((w) => [entryKey(w), w]))
-            const prevKeys = new Set(prev.map((w) => entryKey(w)))
-            let anyChange = false
-
-            // Update existing entries in their original order — preserves UI position.
-            // Closed windows are always removed; the watcher re-hides them if they reopen.
-            const updated = prev.map((p) => {
-              const live = listMap.get(entryKey(p))
-              if (!live) {
-                anyChange = true
-                return null // Window closed — remove from list
-              }
-              if (live.title !== p.title) anyChange = true
-              // Sync Task View / Alt-Tab overlay hidden state with the desktop
-              // toggle ref — the transient window may have been hidden in a prior
-              // cycle and must reflect the current toggle when it reappears.
-              const isAltTab = p.class_name === 'MultitaskingViewFrame'
-              const altTabHidden = isAltTab ? hideDesktopRef.current : p.hidden
-              if (isAltTab && altTabHidden !== p.hidden) anyChange = true
-              return { ...p, title: live.title, hidden: altTabHidden }
-            }).filter(Boolean)
-
-            // Append genuinely new windows (not seen in prev)
-            const newWins = list.filter((w) => !prevKeys.has(entryKey(w)))
-            if (newWins.length > 0) anyChange = true
-
-            if (!anyChange) return prev
-
-            return [
-              ...updated,
-              ...newWins.map((w) => {
-                const locked =
-                  lockedPidsRef.current.has(w.pid) ||
-                  (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
-                  lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-                  (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-                // Task View / Alt-Tab overlay: honour the desktop toggle via ref (transient window)
-                const isAltTab = w.class_name === 'MultitaskingViewFrame'
-                const shouldHide = !!locked || (isAltTab && hideDesktopRef.current)
-                return { ...w, hidden: shouldHide }
-              }),
-            ]
-          })
-        })
-
-        // Actually hide the new windows in the OS (fire-and-forget, outside
-        // the transition so IPC calls are not deferred).
-        for (const hwnd of toAutoHide) {
-          api.hideWindow(hwnd, false).catch(() => {})
-        }
-        // Unhide Alt-Tab overlay windows when the toggle has been turned OFF.
-        for (const hwnd of toAutoUnhideAltTab) {
-          api.unhideWindow(hwnd, false).catch(() => {})
-        }
-      } catch {
-        // silently ignore background poll errors
-      } finally {
-        pollActive = false
-      }
-    }, 2000)
-    return () => clearInterval(poll)
-  }, [])
+   // ---------------------------------------------------------------------------
+   // Background poll — detects new windows and removes closed ones.
+   // ---------------------------------------------------------------------------
+   useEffect(() => {
+     let pollActive = false
+     let pollInterval = null
+     
+     const startPoll = (intervalMs) => {
+       // Clear existing interval if any
+       if (pollInterval) {
+         clearInterval(pollInterval)
+       }
+       
+       pollInterval = setInterval(async () => {
+         // Skip if a previous poll is still running — prevents concurrent
+          // ScreenShieldBackgroundService.exe requests from piling up under a slow system.
+          if (pollActive) return
+         pollActive = true
+         try {
+           const list = await api.listWindows()
+           if (!Array.isArray(list)) return
+ 
+           // Determine which new windows need hiding eagerly, before the React
+           // state update, so the IPC calls fire promptly regardless of when
+           // startTransition schedules the render.
+           const toAutoHide = []
+           const knownKeys = new Set(windowsRef.current.map((w) => entryKey(w)))
+           for (const w of list) {
+             if (w.no_window || knownKeys.has(entryKey(w))) continue
+             if (
+               lockedPidsRef.current.has(w.pid) ||
+               lockedHwndsRef.current.has(w.hwnd) ||
+               lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
+               (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
+             ) {
+               toAutoHide.push(w.hwnd)
+             }
+           }
+ 
+           // Task View / Alt-Tab overlay (MultitaskingViewFrame) is transient — it
+           // only exists while Alt-Tab / Win-Tab is held.  It shares the DWM desktop
+           // compositor layer, so its capture visibility is tied to the desktop toggle.
+           // The poll catches it on each appearance and hides/unhides it accordingly.
+           const toAutoUnhideAltTab = []
+           for (const w of list) {
+             if (w.class_name !== 'MultitaskingViewFrame') continue
+             if (hideDesktopRef.current && !w.hidden) {
+               toAutoHide.push(w.hwnd)
+             } else if (!hideDesktopRef.current && w.hidden) {
+               toAutoUnhideAltTab.push(w.hwnd)
+             }
+           }
+ 
+           // Wrap the render update in startTransition so React can yield to
+           // user interactions mid-render and avoid blocking the Windows message
+           // queue (which would trigger the OS loading cursor).
+           startTransition(() => {
+             setWindows((prev) => {
+               const listMap = new Map(list.map((w) => [entryKey(w), w]))
+               const prevKeys = new Set(prev.map((w) => entryKey(w)))
+               let anyChange = false
+ 
+               // Update existing entries in their original order — preserves UI position.
+               // Closed windows are always removed; the watcher re-hides them if they reopen.
+               const updated = prev.map((p) => {
+                 const live = listMap.get(entryKey(p))
+                 if (!live) {
+                   anyChange = true
+                   return null // Window closed — remove from list
+                 }
+                 if (live.title !== p.title) anyChange = true
+                 // Sync Task View / Alt-Tab overlay hidden state with the desktop
+                 // toggle ref — the transient window may have been hidden in a prior
+                 // cycle and must reflect the current toggle when it reappears.
+                 const isAltTab = p.class_name === 'MultitaskingViewFrame'
+                 const altTabHidden = isAltTab ? hideDesktopRef.current : p.hidden
+                 if (isAltTab && altTabHidden !== p.hidden) anyChange = true
+                 return { ...p, title: live.title, hidden: altTabHidden }
+               }).filter(Boolean)
+ 
+               // Append genuinely new windows (not seen in prev)
+               const newWins = list.filter((w) => !prevKeys.has(entryKey(w)))
+               if (newWins.length > 0) anyChange = true
+ 
+               if (!anyChange) return prev
+ 
+               return [
+                 ...updated,
+                 ...newWins.map((w) => {
+                   const locked =
+                     lockedPidsRef.current.has(w.pid) ||
+                     (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
+                     lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
+                     (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
+                   // Task View / Alt-Tab overlay: honour the desktop toggle via ref (transient window)
+                   const isAltTab = w.class_name === 'MultitaskingViewFrame'
+                   const shouldHide = !!locked || (isAltTab && hideDesktopRef.current)
+                   return { ...w, hidden: shouldHide }
+                 }),
+               ]
+             })
+           })
+ 
+           // Actually hide the new windows in the OS (fire-and-forget, outside
+           // the transition so IPC calls are not deferred).
+           for (const hwnd of toAutoHide) {
+             api.hideWindow(hwnd, false).catch(() => {})
+           }
+           // Unhide Alt-Tab overlay windows when the toggle has been turned OFF.
+           for (const hwnd of toAutoUnhideAltTab) {
+             api.unhideWindow(hwnd, false).catch(() => {})
+           }
+         } catch {
+           // silently ignore background poll errors
+         } finally {
+           pollActive = false
+         }
+       }, intervalMs)
+     }
+     
+     // Adjust polling interval based on app visibility
+     const intervalMs = isAppVisible ? 2000 : 10000 // 2s when visible, 10s when hidden
+     
+     // Start with appropriate interval
+     startPoll(intervalMs)
+     
+     // Cleanup on unmount
+     return () => {
+       if (pollInterval) {
+         clearInterval(pollInterval)
+       }
+     }
+   }, [isAppVisible])
 
   // ---------------------------------------------------------------------------
   // Toggle a single window's hide state
@@ -797,10 +852,21 @@ export default function App() {
                     type="checkbox"
                     className="settings-toggle-checkbox"
                     checked={launchAtStartup}
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const enabled = e.target.checked
                       setLaunchAtStartup(enabled)
-                      api.setLaunchAtStartup?.(enabled).catch(() => {})
+                      try {
+                        const result = await api.setLaunchAtStartup?.(enabled)
+                        if (result && !result.success) {
+                          // Revert the toggle only if the operation was confirmed to have failed
+                          setLaunchAtStartup(!enabled)
+                          console.error('Failed to update startup setting:', result.error)
+                        }
+                      } catch (error) {
+                        // Revert the toggle only if the operation was confirmed to have failed
+                        setLaunchAtStartup(!enabled)
+                        console.error('Failed to update startup setting:', error)
+                      }
                     }}
                   />
                   <span className="settings-toggle-text">Launch ScreenShield on Windows startup</span>

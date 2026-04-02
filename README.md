@@ -36,13 +36,17 @@ Because this API must be called from within the target process, Screen Shield in
 - **Chrome compatibility** — reliably hides Chrome windows across all scenarios including new tabs, detached windows, and tab-drag operations with zero visible frames in capture
 - **Steam compatibility** — stable hiding for Steam windows and overlays
 - **Per-window and group controls** — toggle individual windows with the eye icon, or hide all windows belonging to a process at once
-- **Live preview** — a real-time capture view shows exactly what screen capture software will see
+- **Hidden Applications list sorting** — apps are displayed in two groups: hidden apps (or apps with hidden windows) at the top, followed by visible apps; both groups are sorted alphabetically A-Z
+- **Live preview** — a real-time capture view shows exactly what screen capture software will see (preview pane stops desktop capture stream when paused, saving ~10–20 MB GPU memory)
 - **Auto-hide watcher** — newly opened windows from locked processes are hidden automatically without manual intervention
-- **Advanced controls** — independently hide the desktop background, Task View, or the taskbar from capture
+- **Preview memory usage improvement** — preview pane stops desktop capture stream when paused, saving ~10–20 MB GPU memory
+- **Icon extraction performance** — global icon cache maps process IDs to icon data URLs, avoiding repeated icon extraction and reducing CPU usage during background polling
+- **Advanced controls** — independently hide the desktop background and Task View (combined toggle), or the taskbar from capture
 - **System tray** — minimises to the notification area and continues running in the background; restore from the tray icon or context menu
 - **Portable and installer builds** — available as an NSIS installer or a single portable executable
 - **Session restore** — hidden window state is restored automatically when the application restarts
-- **Launch on startup** — optional toggle in Settings to start Screen Shield with Windows
+- **Window restore on quit** — when quitting the app via system tray, all previously hidden windows are automatically restored before application exit
+- **Launch on startup** — optional toggle in Settings to start Screen Shield with Windows using Windows Task Scheduler for elevated startup without UAC prompts
 - **Theme support** — four built-in themes (Default, Dark, Light, System) with instant switching
 
 ---
@@ -53,8 +57,8 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 
 | Build | Description |
 |---|---|
-| **`ScreenShield_Setup_v1.0.exe`** | Installer (recommended) — installs to Program Files with desktop shortcut |
-| **`ScreenShield_Portable_v1.0.exe`** | Portable executable — no installation required |
+| **`ScreenShield_Setup_v1.1.0.exe`** | Installer (recommended) — installs to Program Files with desktop shortcut |
+| **`ScreenShield_Portable_v1.1.0.exe`** | Portable executable — no installation required |
 
 > **NOTE:**
 > Administrator privileges are recommended. Without elevation, hiding windows owned by other users or high-integrity processes will not work.

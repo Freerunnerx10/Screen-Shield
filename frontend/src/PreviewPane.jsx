@@ -18,19 +18,8 @@ import './PreviewPane.css'
 export default function PreviewPane({ screens, currentScreen, frameStream, onScreenChange }) {
   const videoRef = useRef(null)
   const internalStreamRef = useRef(null)
+  const containerRef = useRef(null)
   const [paused, setPaused] = useState(false)
-
-  const togglePlayPause = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.paused) {
-      video.play().catch(() => {})
-      setPaused(false)
-    } else {
-      video.pause()
-      setPaused(true)
-    }
-  }, [])
 
   // Attach a MediaStream (or null) to the <video> element
   const attachStream = useCallback((stream) => {
@@ -79,6 +68,27 @@ export default function PreviewPane({ screens, currentScreen, frameStream, onScr
     [attachStream],
   )
 
+  const togglePlayPause = useCallback(() => {
+    const video = videoRef.current
+    if (!video) return
+    if (video.paused) {
+      // Resume: restart the capture stream if it was stopped
+      if (!internalStreamRef.current && currentScreen?.id) {
+        startCapture(currentScreen.id)
+      }
+      video.play().catch(() => {})
+      setPaused(false)
+    } else {
+      // Pause: stop the capture stream to save GPU memory
+      if (internalStreamRef.current) {
+        internalStreamRef.current.getTracks().forEach((t) => t.stop())
+        internalStreamRef.current = null
+      }
+      video.pause()
+      setPaused(true)
+    }
+  }, [currentScreen, startCapture])
+
   // When an external frameStream is supplied it takes precedence over
   // the internal getUserMedia approach (reserved for Rust backend frames)
   useEffect(() => {
@@ -124,8 +134,11 @@ export default function PreviewPane({ screens, currentScreen, frameStream, onScr
         </div>
       )}
 
-      {/* Live capture frame — red border signals "this is what's being captured" */}
-      <div className="preview-container">
+       {/* Live capture frame — red border signals "this is what's being captured" */}
+        <div 
+          className="preview-container"
+          ref={containerRef}
+        >
         <video ref={videoRef} className="preview-video" autoPlay muted playsInline />
         {/* LIVE / PAUSED badge — shown once a stream is active */}
         {currentScreen && (

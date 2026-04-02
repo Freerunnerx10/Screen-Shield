@@ -16,7 +16,7 @@
 !macro customInstall
   ; Add Microsoft Defender exclusions for the installed directory and the
   ; helper process and hook DLL so Defender does not quarantine them at runtime.
-  nsExec::ExecToStack "powershell.exe -NonInteractive -WindowStyle Hidden -Command $\"try { Add-MpPreference -ExclusionPath '$INSTDIR' -ExclusionProcess 'ScreenShieldHelper.exe','ScreenShieldHook.dll' -Force -ErrorAction SilentlyContinue } catch {}$\""
+  nsExec::ExecToStack "powershell.exe -NonInteractive -WindowStyle Hidden -Command $\"try { Add-MpPreference -ExclusionPath '$INSTDIR' -ExclusionProcess 'ScreenShieldBackgroundService.exe','ScreenShieldHook.dll' -Force -ErrorAction SilentlyContinue } catch {}$\""
   Pop $0  ; exit code  (ignored)
   Pop $1  ; stdout/err  (ignored)
 
@@ -24,12 +24,12 @@
   ; appear in Windows Apps & Features / Add-Remove Programs.
   WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "URLInfoAbout"  "https://github.com/Freerunnerx10/Screen-Shield"
   WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "HelpLink"      "https://github.com/Freerunnerx10/Screen-Shield/issues"
-  WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "URLUpdateInfo" "https://github.com/Freerunnerx10/Screen-Shield/releases"
+  WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "URLUpdateInfo" "https://github.com/Freerunnerx10/Screen-Shield/releases/latest"
 !macroend
 
 !macro customUnInstall
   ; Remove the Defender exclusions when the application is uninstalled.
-  nsExec::ExecToStack "powershell.exe -NonInteractive -WindowStyle Hidden -Command $\"try { Remove-MpPreference -ExclusionPath '$INSTDIR' -ExclusionProcess 'ScreenShieldHelper.exe','ScreenShieldHook.dll' -Force -ErrorAction SilentlyContinue } catch {}$\""
+  nsExec::ExecToStack "powershell.exe -NonInteractive -WindowStyle Hidden -Command $\"try { Remove-MpPreference -ExclusionPath '$INSTDIR' -ExclusionProcess 'ScreenShieldBackgroundService.exe','ScreenShieldHook.dll' -Force -ErrorAction SilentlyContinue } catch {}$\""
   Pop $0
   Pop $1
 !macroend

@@ -6,7 +6,7 @@ use {
 fn main() -> io::Result<()> {
     if env::var_os("CARGO_CFG_WINDOWS").is_some() {
         WindowsResource::new()
-            .set("FileDescription",  "ScreenShield Privacy Utility")
+            .set("FileDescription",  "Screen Shield - Window Privacy Hook")
             .set("ProductName",      "ScreenShield")
             .set("CompanyName",      "Freerunnerx10")
             .set("LegalCopyright",   "Copyright \u{00a9} 2026 Freerunnerx10")

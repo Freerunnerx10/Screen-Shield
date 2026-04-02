@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import './WindowList.css'
 
 // ── Inline SVG icons ──────────────────────────────────────────────────────
@@ -70,8 +70,11 @@ function deriveAppName(processName) {
 
 // ── AppIcon — shows the process icon, falls back to a letter tile on error ─
 
-function AppIcon({ dataUrl, letter, processName }) {
+function AppIcon({ dataUrl, originalDataUrl, letter, processName }) {
   const [failed, setFailed] = useState(false)
+  const [originalFailed, setOriginalFailed] = useState(false)
+  
+  // Try current icon first
   if (dataUrl && !failed) {
     return (
       <img
@@ -83,6 +86,20 @@ function AppIcon({ dataUrl, letter, processName }) {
       />
     )
   }
+  
+  // Fallback to original icon (cached from exe) when current icon unavailable
+  if (originalDataUrl && !originalFailed) {
+    return (
+      <img
+        className="app-icon"
+        src={originalDataUrl}
+        alt=""
+        draggable={false}
+        onError={() => setOriginalFailed(true)}
+      />
+    )
+  }
+  
   // Fallback for explorer.exe when native icon extraction returned nothing:
   // show the static Windows Explorer SVG rather than a letter tile.
   if (processName?.toLowerCase() === 'explorer.exe') {
@@ -127,6 +144,7 @@ function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
       <div className="app-icon-wrap">
         <AppIcon
           dataUrl={group.iconDataUrl}
+          originalDataUrl={group.originalIconDataUrl}
           letter={iconLetter}
           processName={group.processName}
         />
@@ -233,6 +251,7 @@ export default function WindowList({ windows, loading, onToggle, onSetGroup }) {
         appName: deriveAppName(win.process_name) || `PID ${win.pid}`,
         processName: win.process_name || '',
         iconDataUrl: win.icon_data_url ?? null,
+        originalIconDataUrl: win.original_icon_data_url ?? null,
         pids: new Set(),
         windows: [],
       }
@@ -243,9 +262,35 @@ export default function WindowList({ windows, loading, onToggle, onSetGroup }) {
     nameMap[key].windows.push(win)
   }
 
+  // Split groups into hidden and non-hidden
+  const hiddenGroups = groups.filter(group =>
+    group.windows.some(win => win.hidden)
+  )
+  const nonHiddenGroups = groups.filter(group =>
+    !group.windows.some(win => win.hidden)
+  )
+
+  // Sort each group alphabetically by appName (case-insensitive)
+  hiddenGroups.sort((a, b) =>
+    a.appName.localeCompare(b.appName, undefined, { sensitivity: 'base' })
+  )
+  nonHiddenGroups.sort((a, b) =>
+    a.appName.localeCompare(b.appName, undefined, { sensitivity: 'base' })
+  )
+
   return (
     <div className="window-list">
-      {groups.map((group) => (
+      {hiddenGroups.map((group) => (
+        <AppContainer
+          key={group.key}
+          group={group}
+          onToggle={onToggle}
+          onSetGroup={onSetGroup}
+          isExpanded={expanded.has(group.key)}
+          onToggleExpand={() => toggleExpand(group.key)}
+        />
+      ))}
+      {nonHiddenGroups.map((group) => (
         <AppContainer
           key={group.key}
           group={group}

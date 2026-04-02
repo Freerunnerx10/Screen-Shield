@@ -4,7 +4,7 @@
 #
 # Steps:
 #   1. Initialize MSVC environment (vcvarsall x64)
-#   2. cargo build --release  (produces ScreenShieldHelper.exe + utils.dll)
+#   2. cargo build --release  (produces ScreenShieldBackgroundService.exe + ScreenShieldHook.dll)
 #   3. vite build + electron-builder --win (produces build/)
 
 Set-StrictMode -Version Latest
@@ -98,12 +98,12 @@ if ($cargoExit -ne 0) { Fail "cargo build failed (exit $cargoExit)" }
 
 # Verify the expected outputs exist
 foreach ($f in @(
-    (Join-Path $rustDir "target\release\ScreenShieldHelper.exe"),
-    (Join-Path $rustDir "target\release\ScreenShieldHook.dll")
-)) {
-    if (-not (Test-Path $f)) { Fail "Expected output not found: $f" }
-}
-OK "ScreenShieldHelper.exe and ScreenShieldHook.dll built successfully."
+     (Join-Path $rustDir "target\release\ScreenShieldBackgroundService.exe"),
+     (Join-Path $rustDir "target\release\ScreenShieldHook.dll")
+ )) {
+     if (-not (Test-Path $f)) { Fail "Expected output not found: $f" }
+ }
+ OK "ScreenShieldBackgroundService.exe and ScreenShieldHook.dll built successfully."
 
 # ---------------------------------------------------------------------------
 # 1b. Remove intermediate executables and DLLs from target/release/deps/

@@ -62,6 +62,20 @@ contextBridge.exposeInMainWorld('screenShield', {
   /** Returns the current launch-at-startup state */
   getLaunchAtStartup: () => ipcRenderer.invoke('get-launch-at-startup'),
 
+  /** Register a callback to be called when the main window is hidden */
+  onAppHidden: (cb) => {
+    const handler = (_event) => cb();
+    ipcRenderer.on('app-hidden', handler);
+    return () => ipcRenderer.off('app-hidden', handler);
+  },
+
+  /** Register a callback to be called when the main window is shown */
+  onAppShown: (cb) => {
+    const handler = (_event) => cb();
+    ipcRenderer.on('app-shown', handler);
+    return () => ipcRenderer.off('app-shown', handler);
+  },
+
   /** Register a callback to be called when the main process initiates a settings reset (e.g. tray menu) */
   onResetSettings: (cb) => ipcRenderer.on('main:reset-settings', cb),
 })

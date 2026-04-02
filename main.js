@@ -62,20 +62,300 @@ function resetAppSettings() {
 // utility and does not need the full Chromium feature set.
 // ---------------------------------------------------------------------------
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=128')
-app.commandLine.appendSwitch('disable-features', 'TranslateUI,OptimizationHints')
+app.commandLine.appendSwitch('disable-features', 'TranslateUI,OptimizationHints,VizDisplayCompositor,AudioServiceOutOfProcess,NetworkService,NetworkServiceInProcess,RendererCodeIntegrity,Spelling')
 app.commandLine.appendSwitch('disable-background-networking')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-spell-check')
+// ---------------------------------------------------------------------------
+// Runtime elevation check — enforces admin privileges on launch.
+// Primary method: app.manifest requests requireAdministrator
+// Secondary method: runtime check + relaunch if not elevated
+// ---------------------------------------------------------------------------
+const ELEVATED_FLAG = '--elevated'
 
-// ---------------------------------------------------------------------------
-// Elevation helper — used only to show a warning in the renderer, not to gate
-// startup.  DLL injection will fail gracefully if not elevated and the UI will
-// show the error returned by the backend.
-// ---------------------------------------------------------------------------
-function isElevated() {
+function isRunningAsAdmin() {
   try {
     execSync('fltmc', { stdio: 'ignore' })
+    console.log('[DEBUG] isRunningAsAdmin(): true (fltmc succeeded)');
     return true
-  } catch {
+  } catch (e) {
+    console.log('[DEBUG] isRunningAsAdmin(): false (fltmc failed)');
+    console.log('[DEBUG] fltmc error:', e.message);
     return false
+  }
+}
+
+function restartAsAdmin() {
+  // Relaunch self with elevation using shell "runas" verb
+  // This triggers the UAC prompt
+  const exePath = process.execPath
+  // Get all arguments except the --elevated flag we may have added
+  const args = process.argv.slice(1).filter(arg => arg !== ELEVATED_FLAG)
+  
+  // Use PowerShell to invoke runas - more reliable on Windows
+  const psCommand = `Start-Process -FilePath '${exePath}' -ArgumentList '${args.join("'").replace(/"/g, '\\"')}' -Verb RunAs -WindowStyle Hidden`
+  
+  execFile(
+    'powershell.exe',
+    ['-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psCommand],
+    { windowsHide: true },
+    () => {
+      // Exit after spawning elevated process - user may cancel UAC
+      // The app will exit gracefully after the UAC dialog closes
+    }
+  )
+  
+  // Exit this non-elevated instance
+  app.quit()
+}
+
+// Check for elevation before app is ready - this is the secondary enforcement
+// If we have --elevated flag, we came from a relaunch and should continue
+if (!isRunningAsAdmin() && !process.argv.includes(ELEVATED_FLAG)) {
+  // This is a non-blocking check - we launch the elevated process and exit
+  // But we need to defer until app is ready to use app.quit()
+  app.whenReady().then(() => {
+    // Double-check after app is ready (handles edge cases)
+    if (!isRunningAsAdmin()) {
+      console.log('[Screen Shield] Not running as administrator. Requesting elevation...')
+      restartAsAdmin()
+      // Wait briefly for the elevated process to start before quitting
+      setTimeout(() => {
+        // If user cancelled UAC, the elevated process won't start - exit anyway
+        app.exit(1)
+      }, 2000)
+    }
+  })
+}
+
+// Legacy helper — used to show a warning in the renderer, not to gate startup.
+// DLL injection will fail gracefully if not elevated and the UI will show the
+// error returned by the backend.
+function isElevated() {
+  return isRunningAsAdmin()
+}
+
+function createStartupTask() {
+  if (process.platform !== 'win32') return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    // For packaged app, use the executable path directly
+    // For portable version, use absolute path to current EXE
+    const command = process.execPath;
+    const taskName = "ScreenShieldStartup";
+    const username = process.env.USERNAME || 'CURRENTUSER';
+
+    // =========================================================================
+    // DEBUG LOGGING - Step 1: Log exact command
+    // =========================================================================
+    console.log('='.repeat(80));
+    console.log('[DEBUG] Step 1: Log Exact Command');
+    console.log('='.repeat(80));
+    console.log(`[DEBUG] Task name: ${taskName}`);
+    console.log(`[DEBUG] Executable path: ${command}`);
+    console.log(`[DEBUG] Username: ${username}`);
+    console.log(`[DEBUG] process.env.USERNAME: ${process.env.USERNAME}`);
+    console.log(`[DEBUG] process.execPath: ${process.execPath}`);
+    console.log(`[DEBUG] process.platform: ${process.platform}`);
+    console.log(`[DEBUG] app.isPackaged: ${app.isPackaged}`);
+    
+    // =========================================================================
+    // DEBUG LOGGING - Step 6: Confirm Elevation
+    // =========================================================================
+    console.log('='.repeat(80));
+    console.log('[DEBUG] Step 6: Confirm Elevation');
+    console.log('='.repeat(80));
+    const isAdmin = isRunningAsAdmin();
+    console.log(`[DEBUG] Is running as admin: ${isAdmin}`);
+    if (!isAdmin) {
+      console.error('[DEBUG] ERROR: Not running as administrator!');
+      reject(new Error('Not running as administrator. Startup task creation requires elevation.'));
+      return;
+    }
+
+    // =========================================================================
+    // DEBUG LOGGING - Step 4: Validate Executable Path
+    // =========================================================================
+    console.log('='.repeat(80));
+    console.log('[DEBUG] Step 4: Validate Executable Path');
+    console.log('='.repeat(80));
+    console.log(`[DEBUG] Resolved path: ${command}`);
+    console.log(`[DEBUG] Path is absolute: ${path.isAbsolute(command)}`);
+    try {
+      const stats = fs.statSync(command);
+      console.log(`[DEBUG] File exists: true`);
+      console.log(`[DEBUG] File size: ${stats.size} bytes`);
+    } catch (err) {
+      console.error(`[DEBUG] File exists: false`);
+      console.error(`[DEBUG] Error checking file: ${err.message}`);
+    }
+    console.log(`[DEBUG] Path contains spaces: ${command.includes(' ')}`);
+    console.log(`[DEBUG] Quoted path: "${command}"`);
+
+    // =========================================================================
+    // DEBUG LOGGING - Step 5: Validate User Context
+    // =========================================================================
+    console.log('='.repeat(80));
+    console.log('[DEBUG] Step 5: Validate User Context');
+    console.log('='.repeat(80));
+    console.log(`[DEBUG] process.env.USERNAME: ${process.env.USERNAME}`);
+    console.log(`[DEBUG] Username to use: ${username}`);
+    console.log(`[DEBUG] Is fallback used: ${username === 'CURRENTUSER'}`);
+
+    console.log(`[Screen Shield] Creating startup task for user: ${username}`);
+    console.log(`[Screen Shield] Executable path: ${command}`);
+
+    // Remove any existing task to avoid duplicates
+    execFile('schtasks', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true }, () => {
+      // Ignore errors - task might not exist
+      
+      // Build the schtasks command arguments
+      const args = [
+        '/Create',
+        '/TN', taskName,
+        '/TR', `"${command}"`,
+        '/SC', 'ONLOGON',   // Run at user logon (not ONLOGIN - that's invalid)
+        '/RL', 'HIGHEST',   // Run with highest privileges
+        '/RU', username,    // Run as current user (do not quote - execFile handles arguments separately)
+        '/F'                // Force creation (overwrite if exists)
+      ];
+
+      // =========================================================================
+      // DEBUG LOGGING - Step 7: Manual Reproduction
+      // =========================================================================
+      console.log('='.repeat(80));
+      console.log('[DEBUG] Step 7: Manual Reproduction Command');
+      console.log('='.repeat(80));
+      const manualCommand = `schtasks ${args.join(' ')}`;
+      console.log(`[DEBUG] Copy-paste ready command:`);
+      console.log(`[DEBUG] ${manualCommand}`);
+      console.log('='.repeat(80));
+
+      console.log(`[Screen Shield] Executing: schtasks ${args.join(' ')}`);
+      
+      // Create the task with current user context
+      execFile('schtasks', args, { windowsHide: true }, (error, stdout, stderr) => {
+        // =========================================================================
+        // DEBUG LOGGING - Step 2: Capture Execution Output
+        // =========================================================================
+        console.log('='.repeat(80));
+        console.log('[DEBUG] Step 2: Capture Execution Output');
+        console.log('='.repeat(80));
+        console.log(`[DEBUG] Exit code: ${error ? error.code : 0}`);
+        console.log(`[DEBUG] stdout: ${stdout || '(empty)'}`);
+        console.log(`[DEBUG] stderr: ${stderr || '(empty)'}`);
+        console.log('='.repeat(80));
+
+        if (error) {
+          console.error('[Screen Shield] Failed to create startup task:', error);
+          console.error('[Screen Shield] stdout:', stdout);
+          console.error('[Screen Shield] stderr:', stderr);
+          reject(error);
+        } else {
+          console.log('[Screen Shield] Startup task created successfully.');
+          console.log('[Screen Shield] stdout:', stdout);
+          
+          // =========================================================================
+          // DEBUG LOGGING - Step 3: Verify Task Creation
+          // =========================================================================
+          console.log('='.repeat(80));
+          console.log('[DEBUG] Step 3: Verify Task Creation');
+          console.log('='.repeat(80));
+          console.log(`[DEBUG] Running: schtasks /Query /TN ${taskName}`);
+          
+          // Verify the task was actually created
+          execFile('schtasks', ['/Query', '/TN', taskName], { windowsHide: true }, (queryError, queryStdout, queryStderr) => {
+            console.log(`[DEBUG] Query exit code: ${queryError ? queryError.code : 0}`);
+            console.log(`[DEBUG] Query stdout: ${queryStdout || '(empty)'}`);
+            console.log(`[DEBUG] Query stderr: ${queryStderr || '(empty)'}`);
+            console.log('='.repeat(80));
+            
+            if (queryError) {
+              console.error('[Screen Shield] Task creation verification failed:', queryError);
+              reject(new Error('Task creation could not be verified'));
+            } else {
+              console.log('[Screen Shield] Task verification successful:', queryStdout);
+              resolve();
+            }
+          });
+        }
+      });
+    });
+  });
+}
+
+function removeStartupTask() {
+  if (process.platform !== 'win32') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const taskName = "ScreenShieldStartup";
+    console.log(`[Screen Shield] Removing startup task: ${taskName}`);
+    
+    execFile('schtasks', ['/Delete', '/TN', taskName, '/F'], { windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('[Screen Shield] Failed to remove startup task:', error);
+        console.error('[Screen Shield] stdout:', stdout);
+        console.error('[Screen Shield] stderr:', stderr);
+      } else {
+        console.log('[Screen Shield] Startup task removed successfully.');
+        console.log('[Screen Shield] stdout:', stdout);
+      }
+      resolve(); // Always resolve - don't fail if task doesn't exist
+    });
+  });
+}
+
+function removeLegacyRegistryStartup() {
+  if (process.platform !== 'win32') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const regPath = 'HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run';
+    const valueName = 'com.screenshield.app';
+    console.log(`[Screen Shield] Removing legacy registry startup entry: ${valueName}`);
+    
+    execFile('reg', ['delete', regPath, '/v', valueName, '/f'], { windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        // Ignore if the entry doesn't exist
+        console.log('[Screen Shield] No legacy registry startup entry to remove.');
+        console.log('[Screen Shield] stdout:', stdout);
+        console.log('[Screen Shield] stderr:', stderr);
+      } else {
+        console.log('[Screen Shield] Legacy registry startup entry removed successfully.');
+        console.log('[Screen Shield] stdout:', stdout);
+      }
+      resolve(); // Always resolve - don't fail if entry doesn't exist
+    });
+  });
+}
+
+function checkStartupTaskExists() {
+  if (process.platform !== 'win32') return false;
+  const taskName = "ScreenShieldStartup";
+  
+  // =========================================================================
+  // DEBUG LOGGING - checkStartupTaskExists
+  // =========================================================================
+  console.log('='.repeat(80));
+  console.log('[DEBUG] checkStartupTaskExists() called');
+  console.log('='.repeat(80));
+  console.log(`[DEBUG] Task name: ${taskName}`);
+  console.log(`[DEBUG] Running: schtasks /Query /TN ${taskName}`);
+  
+  try {
+    const result = execSync(`schtasks /Query /TN ${taskName}`, { windowsHide: true }).toString();
+    console.log(`[DEBUG] Task exists: true`);
+    console.log(`[DEBUG] Query result: ${result}`);
+    console.log('='.repeat(80));
+    return true;
+  } catch (e) {
+    console.log(`[DEBUG] Task exists: false`);
+    console.log(`[DEBUG] Error: ${e.message}`);
+    console.log(`[DEBUG] Error code: ${e.status}`);
+    console.log(`[DEBUG] stderr: ${e.stderr ? e.stderr.toString() : '(empty)'}`);
+    console.log('='.repeat(80));
+    return false;
   }
 }
 
@@ -104,8 +384,8 @@ function addDefenderExclusions() {
   // prevents non-admin errors from producing noisy stderr output.
   const psCmd = [
     'try {',
-    `  Add-MpPreference -ExclusionPath '${exeDir}','${resDir}'`,
-    `    -ExclusionProcess 'ScreenShieldHelper.exe','ScreenShieldHook.dll'`,
+     `  Add-MpPreference -ExclusionPath '${exeDir}','${resDir}'`,
+     `    -ExclusionProcess 'ScreenShieldBackgroundService.exe','ScreenShieldHook.dll'`,
     '    -Force -ErrorAction SilentlyContinue',
     '} catch {}',
   ].join(' ')
@@ -121,7 +401,7 @@ function addDefenderExclusions() {
 }
 
 // ---------------------------------------------------------------------------
-// Persistent backend client — keeps ONE ScreenShieldHelper.exe --serve process alive
+// Persistent backend client — keeps ONE ScreenShieldBackgroundService.exe --serve process alive
 // for the lifetime of the Electron session.  All operations (list, hide/unhide,
 // watch management) are dispatched through stdin/stdout JSON IPC so no new
 // processes need to be spawned per operation.
@@ -227,20 +507,22 @@ let client = null
 // Process names currently under watch — passed to list so that
 // tray-minimised processes still appear in the application list.
 let watchedNames = []
+// Track HWNDs of windows that have been hidden by the app
+let hiddenWindows = []
 
 // ---------------------------------------------------------------------------
 // CLI pass-through: electron . -- --hide <pid>  /  --unhide <pid>
 // ---------------------------------------------------------------------------
-const argv = process.argv.slice(isDev ? 2 : 1)
-if (argv.includes('--hide') || argv.includes('--unhide')) {
-  const backendPath = isDev
-    ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldHelper.exe')
-    : path.join(process.resourcesPath, 'ScreenShieldHelper.exe')
-
-  const child = spawn(backendPath, argv, { stdio: 'inherit' })
-  child.on('close', (code) => process.exit(code ?? 0))
-  // don't open a window
-} else {
+   const argv = process.argv.slice(isDev ? 2 : 1)
+   if (argv.includes('--hide') || argv.includes('--unhide')) {
+     const backendPath = isDev
+       ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldBackgroundService.exe')
+       : path.join(process.resourcesPath, 'ScreenShieldBackgroundService.exe')
+ 
+     const child = spawn(backendPath, argv, { stdio: 'inherit' })
+     child.on('close', (code) => process.exit(code ?? 0))
+     // don't open a window
+   } else {
   // Prevent multiple instances — second launch focuses the running window and exits.
   if (!app.requestSingleInstanceLock()) {
     app.quit()
@@ -253,6 +535,9 @@ if (argv.includes('--hide') || argv.includes('--unhide')) {
     })
     app.whenReady().then(async () => {
       Menu.setApplicationMenu(null)
+
+      // Clean up legacy registry startup entry
+      removeLegacyRegistryStartup()
 
       // ── 1. Show the splash screen FIRST ────────────────────────────────
       // Create and display the splash before any heavy initialisation so the
@@ -269,13 +554,13 @@ if (argv.includes('--hide') || argv.includes('--unhide')) {
       // Defender does not quarantine the helper on its first spawn.
       await addDefenderExclusions()
 
-      // Start the persistent backend client before the main window loads so
-      // IPC handlers are ready as soon as the renderer sends its first request.
-      const backendPath = isDev
-        ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldHelper.exe')
-        : path.join(process.resourcesPath, 'ScreenShieldHelper.exe')
-      client = new ScreenShieldHelperClient(backendPath)
-      client.start()
+       // Start the persistent backend client before the main window loads so
+       // IPC handlers are ready as soon as the renderer sends its first request.
+       const backendPath = isDev
+         ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldBackgroundService.exe')
+         : path.join(process.resourcesPath, 'ScreenShieldBackgroundService.exe')
+       client = new ScreenShieldHelperClient(backendPath)
+       client.start()
 
       // ── 3. Create the main window (hidden until splash closes) ─────────
       createMainWindow()
@@ -467,8 +752,131 @@ function createMainWindow() {
     }
   })
 
+  // -----------------------------------------------------------------------
+  // Fix for white screen after long idle periods in system tray
+  // -----------------------------------------------------------------------
+  // After extended idle time (hours), Windows may reclaim GPU resources or
+  // Chromium's rendering context may be lost. When the window is shown again,
+  // the webContents may not properly repaint, resulting in a white screen.
+  //
+  // Solution:
+  // 1. Force a repaint on every 'show' event using webContents.invalidate()
+  // 2. Add a fallback that detects blank content and reloads if necessary
+  // 3. Log all show/hide events for debugging
+  // -----------------------------------------------------------------------
+
+  let lastHideTime = null
+  let showRetryCount = 0
+  const MAX_SHOW_RETRIES = 3
+
+   mainWindow.on('hide', () => {
+     lastHideTime = Date.now()
+     console.log(`[Screen Shield] Window hidden to tray at ${new Date().toISOString()}`)
+     // Notify renderer that app is hidden
+     if (mainWindow && !mainWindow.isDestroyed()) {
+       mainWindow.webContents.send('app-hidden')
+     }
+   })
+ 
+   mainWindow.on('show', () => {
+     const now = Date.now()
+     const hiddenDuration = lastHideTime ? (now - lastHideTime) / 1000 : 0
+     console.log(`[Screen Shield] Window shown from tray (hidden for ${hiddenDuration.toFixed(1)}s)`)
+ 
+     // Force Chromium to repaint the entire page — this recovers from GPU
+     // context loss or rendering pipeline suspension after long idle periods.
+     if (mainWindow && !mainWindow.isDestroyed()) {
+       mainWindow.webContents.invalidate()
+ 
+       // For very long idle periods (>5 minutes), add a delayed check to
+       // detect if the page is still blank and force a reload if needed.
+       if (hiddenDuration > 300) {
+         console.log(`[Screen Shield] Long idle detected (${hiddenDuration.toFixed(0)}s), scheduling content verification`)
+         setTimeout(() => {
+           verifyAndRecoverContent()
+         }, 500)
+       }
+     }
+     // Notify renderer that app is shown
+     if (mainWindow && !mainWindow.isDestroyed()) {
+       mainWindow.webContents.send('app-shown')
+     }
+   })
+
+  /**
+   * Verify that the webContents has actual content and recover if blank.
+   * This handles edge cases where invalidate() alone doesn't restore rendering.
+   */
+  function verifyAndRecoverContent() {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+
+    mainWindow.webContents.executeJavaScript(`
+      (function() {
+        // Check if the page has any visible content
+        const body = document.body
+        if (!body) return { blank: true, reason: 'no-body' }
+
+        const hasContent = body.children.length > 0
+        const hasVisibleText = body.innerText && body.innerText.trim().length > 0
+        const hasVisibleElements = body.querySelector('div, span, p, img, svg, button, input')
+
+        // If the page appears blank, signal recovery needed
+        if (!hasContent && !hasVisibleText && !hasVisibleElements) {
+          return { blank: true, reason: 'no-content' }
+        }
+
+        return { blank: false }
+      })()
+    `).then((result) => {
+      if (result.blank) {
+        showRetryCount++
+        console.log(`[Screen Shield] Blank content detected (attempt ${showRetryCount}/${MAX_SHOW_RETRIES}), reason: ${result.reason}`)
+
+        if (showRetryCount <= MAX_SHOW_RETRIES) {
+          // Force a full reload to recover rendering
+          console.log(`[Screen Shield] Reloading webContents to recover from blank state`)
+          mainWindow.webContents.reload()
+        } else {
+          console.log(`[Screen Shield] Max retries reached, attempting alternative recovery`)
+          // Last resort: recreate the renderer by loading the URL again
+          if (isDev) {
+            mainWindow.loadURL('http://localhost:5173')
+          } else {
+            mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'))
+          }
+          showRetryCount = 0
+        }
+      } else {
+        // Content is visible, reset retry counter
+        if (showRetryCount > 0) {
+          console.log(`[Screen Shield] Content verified successfully after ${showRetryCount} recovery attempts`)
+        }
+        showRetryCount = 0
+      }
+    }).catch((err) => {
+      // JavaScript execution failed — likely a renderer crash, reload to recover
+      console.log(`[Screen Shield] Content verification failed: ${err.message}, reloading`)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reload()
+      }
+    })
+  }
+
+  // Also listen for renderer process crashes and recover automatically
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.log(`[Screen Shield] Renderer process gone: ${details.reason}`)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      setTimeout(() => {
+        console.log(`[Screen Shield] Reloading after renderer crash`)
+        mainWindow.webContents.reload()
+      }, 100)
+    }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
+    lastHideTime = null
+    showRetryCount = 0
   })
 
   setupTray()
@@ -588,12 +996,22 @@ ipcMain.handle('get-windows', async () => {
 /** Hide a window by hwnd */
 ipcMain.handle('hide-window', async (_event, hwnd, altTab) => {
   if (!client) return
+  
+  // Track the window as hidden
+  if (!hiddenWindows.includes(hwnd)) {
+    hiddenWindows.push(hwnd)
+  }
+  
   return client.send('hide', { hwnds: [hwnd], alt_tab: !!altTab })
 })
 
 /** Unhide a window by hwnd */
 ipcMain.handle('unhide-window', async (_event, hwnd, altTab) => {
   if (!client) return
+  
+  // Remove from tracking when unhidden
+  hiddenWindows = hiddenWindows.filter(h => h !== hwnd)
+  
   return client.send('unhide', { hwnds: [hwnd], alt_tab: !!altTab })
 })
 
@@ -694,14 +1112,52 @@ ipcMain.handle('save-setting', (_event, key, value) => {
 ipcMain.handle('reset-settings', () => { resetAppSettings() })
 
 /** Set or remove the Windows startup (login item) entry */
-ipcMain.handle('set-launch-at-startup', (_event, enable) => {
-  app.setLoginItemSettings({ openAtLogin: !!enable })
-  writeConfig({ launchAtStartup: !!enable })
+ipcMain.handle('set-launch-at-startup', async (_event, enable) => {
+  // =========================================================================
+  // DEBUG LOGGING - set-launch-at-startup IPC handler
+  // =========================================================================
+  console.log('='.repeat(80));
+  console.log('[DEBUG] set-launch-at-startup IPC handler called');
+  console.log('='.repeat(80));
+  console.log(`[DEBUG] Enable parameter: ${enable}`);
+  console.log(`[DEBUG] Type of enable: ${typeof enable}`);
+  console.log(`[DEBUG] Boolean value: ${!!enable}`);
+  
+  try {
+    if (!!enable) {
+      console.log('[DEBUG] Calling createStartupTask()...');
+      await createStartupTask();
+      console.log('[DEBUG] createStartupTask() completed successfully');
+    } else {
+      console.log('[DEBUG] Calling removeStartupTask()...');
+      await removeStartupTask();
+      console.log('[DEBUG] removeStartupTask() completed successfully');
+    }
+    writeConfig({ launchAtStartup: !!enable })
+    console.log('[DEBUG] Config updated with launchAtStartup:', !!enable);
+    console.log('='.repeat(80));
+    return { success: true }
+  } catch (error) {
+    console.error('[Screen Shield] Failed to update startup setting:', error);
+    console.error('[DEBUG] Error details:', error.message);
+    console.error('[DEBUG] Error stack:', error.stack);
+    console.log('='.repeat(80));
+    return { success: false, error: error.message }
+  }
 })
 
 /** Returns the current launch-at-startup state */
 ipcMain.handle('get-launch-at-startup', () => {
-  return app.getLoginItemSettings().openAtLogin
+  // =========================================================================
+  // DEBUG LOGGING - get-launch-at-startup IPC handler
+  // =========================================================================
+  console.log('='.repeat(80));
+  console.log('[DEBUG] get-launch-at-startup IPC handler called');
+  console.log('='.repeat(80));
+  const exists = checkStartupTaskExists();
+  console.log(`[DEBUG] Task exists: ${exists}`);
+  console.log('='.repeat(80));
+  return exists;
 })
 
 // ---------------------------------------------------------------------------
@@ -718,6 +1174,23 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
+  // Restore all hidden windows before quitting
+  if (client && hiddenWindows.length > 0) {
+    // Make a copy of the array to avoid issues if it changes during iteration
+    const windowsToRestore = [...hiddenWindows]
+    
+    try {
+      // Unhide all tracked windows
+      client.send('unhide', { hwnds: windowsToRestore, alt_tab: false })
+      
+      // Clear the tracking array
+      hiddenWindows = []
+    } catch (error) {
+      // Log error but continue with app exit
+      console.error('[Screen Shield] Error restoring hidden windows on quit:', error)
+    }
+  }
+  
   if (client) {
     client.stop()
     client = null

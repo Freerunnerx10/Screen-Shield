@@ -459,8 +459,8 @@ pub fn start() {
 
     if !hide_flag && !unhide_flag {
         eprintln!(
-            "Usage: ScreenShieldHelper --list | --watch <name>... | --hide <hwnd|pid|name>... | --unhide <hwnd|pid|name>..."
-        );
+             "Usage: ScreenShieldBackgroundService --list | --watch <name>... | --hide <hwnd|pid|name>... | --unhide <hwnd|pid|name>..."
+         );
         std::process::exit(1);
     }
 

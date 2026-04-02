@@ -1,7 +1,11 @@
 [package]
-name = "injector"
+name = "screenshield-background-service"
 version = "1.0.0"
 edition = "2024"
+
+[[bin]]
+name = "ScreenShieldBackgroundService"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.49", features = ["derive"] }
@@ -30,6 +34,4 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 [build-dependencies]
 winresource = "0.1.23"
 
-[[bin]]
-name = "ScreenShieldHelper"
-path = "src/main.rs"
+
