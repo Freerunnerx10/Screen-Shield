@@ -31,9 +31,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - On enable, applies `WDA_EXCLUDEFROMCAPTURE` proactively to pre-existing Task Switching window via `EnumWindows`
   - `WINEVENT_INCONTEXT` hook re-applies WDA on `EVENT_OBJECT_SHOW` events for continuous protection
   - Explorer-mode skips cloaking so overlay remains visible to user immediately
+- **Added documentation** — included instructions in README on how to manually configure Microsoft Defender exclusions for Screen Shield
 
 ### Changed
 - **Version bump** — updated to version 1.1.1 across all manifests
+- **Removed automatic Defender exclusions** — eliminated the `addDefenderExclusions()` function in `main.js` that automatically configured Microsoft Defender exclusions
 - **Renamed desktop toggle** — changed "Hide desktop background and Task View from screen capture" to "Hide desktop background from screen capture"
 - **UI refinements** — updated StatusBar and App.jsx for better consistency
 - **Documentation** — refactored README Features section to focus on user benefits
