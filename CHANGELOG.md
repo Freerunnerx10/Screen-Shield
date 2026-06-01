@@ -24,23 +24,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1.1] - 2026-04-16
-### Changed
-- **Renamed desktop toggle and removed Task View targeting** (`frontend/src/App.jsx`) — the "Hide desktop background and Task View from screen capture" toggle has been renamed to **"Hide desktop background from screen capture"**; the toggle no longer targets `MultitaskingViewFrame` (Task View / Alt-Tab overlay) because `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` does not actually hide the Task View or Alt-Tab switcher from screen capture — it only affects the desktop background (Program Manager window). The background poll and new-window logic have been updated to match.
-
+## [1.1.1] - 2026-06-01
 ### Added
-- **"Hide Task View and Alt+Tab from screen capture" toggle** (`frontend/src/App.jsx`, `native-backend/payload/src/lib.rs`, `native-backend/injector/src/native.rs`) — new Advanced panel checkbox that hides the Task View (Win+Tab) and Alt+Tab switcher overlay from screen capture via a class-filtered in-process hook injected into `explorer.exe`
-  - The hook targets `XamlExplorerHostIslandWindow` (Windows 11's XAML Island window class for the Task Switching UI); the previously-targeted `MultitaskingViewFrame` class does not exist on Windows 11
-  - On enable, `WDA_EXCLUDEFROMCAPTURE` is applied proactively to the pre-existing (hidden) Task Switching window via `EnumWindows`, so it is already protected before the user presses Alt+Tab or Win+Tab
-  - The `WINEVENT_INCONTEXT` hook catches `EVENT_OBJECT_SHOW` events to re-apply WDA when the overlay becomes visible, ensuring continuous protection across sessions
-  - Explorer-mode skips cloaking (unlike normal app hiding) so the overlay remains visible to the user immediately
+- **"Hide Task View and Alt+Tab from screen capture" toggle** — new Advanced panel checkbox that hides the Task View (Win+Tab) and Alt+Tab switcher overlay from screen capture via a class-filtered in-process hook injected into explorer.exe
+  - Targets `XamlExplorerHostIslandWindow` (Windows 11's XAML Island window class for Task Switching UI)
+  - On enable, applies `WDA_EXCLUDEFROMCAPTURE` proactively to pre-existing Task Switching window via `EnumWindows`
+  - `WINEVENT_INCONTEXT` hook re-applies WDA on `EVENT_OBJECT_SHOW` events for continuous protection
+  - Explorer-mode skips cloaking so overlay remains visible to user immediately
+
+### Changed
+- **Version bump** — updated to version 1.1.1 across all manifests
+- **Renamed desktop toggle** — changed "Hide desktop background and Task View from screen capture" to "Hide desktop background from screen capture"
+- **UI refinements** — updated StatusBar and App.jsx for better consistency
+- **Documentation** — refactored README Features section to focus on user benefits
 
 ### Fixed
-- **Desktop background hiding toggle not working** (`native-backend/injector/src/native.rs`, `frontend/src/App.jsx`) — the "Hide desktop background and Task View from screen capture" toggle was not hiding the desktop background (Program Manager window) from screen capture
-  - **Root cause:** The v1.1.0 visual-flicker fix incorrectly added `Progman` and `Shell_TrayWnd` to the backend's `EXCLUDED_CLASSES` list, preventing these windows from being returned in enumeration. Additionally, `toggleHideDesktop()` was narrowed to only target `MultitaskingViewFrame` (Alt-Tab overlay), skipping the desktop background entirely
-  - **Fix:** Removed `Progman` and `Shell_TrayWnd` from `EXCLUDED_CLASSES` so the desktop and taskbar windows are returned to the frontend. Added `Progman` to `SYSTEM_UI_CLASSES` with a synthetic title fallback. Restored `toggleHideDesktop()` to target both `Program Manager` (desktop) and `MultitaskingViewFrame` (Task View / Alt-Tab). Updated the background poll to keep both windows in sync with the desktop toggle
-  - **Impact:** Enabling the toggle now makes the desktop background appear grey/blank in screen capture software, remote desktop sessions, and similar capture mechanisms via `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`
-- **Toggle label incorrect** (`frontend/src/App.jsx`) — the Advanced panel checkbox read "Hide Task View from screen capture" instead of "Hide desktop background and Task View from screen capture"
+- **Desktop background hiding toggle** — removed `Progman` and `Shell_TrayWnd` from backend's `EXCLUDED_CLASSES` list, added `Progman` to `SYSTEM_UI_CLASSES`, restored `toggleHideDesktop()` to target both Program Manager and Task View windows, updated background poll to keep windows in sync
+- **Toggle label incorrect** — corrected Advanced panel checkbox label from "Hide Task View from screen capture" to proper description
 
 ---
 

@@ -31,23 +31,21 @@ Because this API must be called from within the target process, Screen Shield in
 
 ## Features
 
-- **Screen capture protection** — uses the Windows `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` API to hide windows from screenshots, recordings, and streaming software while keeping them visible on your display
-- **Instant window hiding** — new windows from hidden processes are protected before their first frame is composited, using in-process hooks and DWM cloaking
-- **Chrome compatibility** — reliably hides Chrome windows across all scenarios including new tabs, detached windows, and tab-drag operations with zero visible frames in capture
+- **Screen capture protection** — prevents selected windows and overlays from appearing in screenshots, screen recordings, and streaming software while keeping them fully visible on your display
+- **Instant window hiding** — new windows from protected applications are hidden automatically before they become visible in capture software
+- **Chrome compatibility** — reliably hides Chrome windows in all scenarios including new tabs, detached windows, and tab-drag operations
 - **Steam compatibility** — stable hiding for Steam windows and overlays
 - **Per-window and group controls** — toggle individual windows with the eye icon, or hide all windows belonging to a process at once
-- **Hidden Applications list sorting** — apps are displayed in two groups: hidden apps (or apps with hidden windows) at the top, followed by visible apps; both groups are sorted alphabetically A-Z
-- **Live preview** — a real-time capture view shows exactly what screen capture software will see (preview pane stops desktop capture stream when paused, saving ~10–20 MB GPU memory)
-- **Auto-hide watcher** — newly opened windows from locked processes are hidden automatically without manual intervention
-- **Preview memory usage improvement** — preview pane stops desktop capture stream when paused, saving ~10–20 MB GPU memory
-- **Icon extraction performance** — global icon cache maps process IDs to icon data URLs, avoiding repeated icon extraction and reducing CPU usage during background polling
-- **Advanced controls** — independently hide the desktop background and Task View (combined toggle), or the taskbar from capture
-- **System tray** — minimises to the notification area and continues running in the background; restore from the tray icon or context menu
-- **Portable and installer builds** — available as an NSIS installer or a single portable executable
-- **Session restore** — hidden window state is restored automatically when the application restarts
-- **Window restore on quit** — when quitting the app via system tray, all previously hidden windows are automatically restored before application exit
-- **Launch on startup** — optional toggle in Settings to start Screen Shield with Windows using Windows Task Scheduler for elevated startup without UAC prompts
-- **Theme support** — four built-in themes (Default, Dark, Light, System) with instant switching
+- **Intelligent window list** — hidden applications appear at the top of the list, sorted alphabetically, with visible applications below
+- **Live preview** — see exactly what screen capture software will see in real time
+- **Auto-hide watcher** — newly opened windows from protected applications are hidden automatically without manual intervention
+- **Advanced controls** — independently hide the desktop background, Task View, or taskbar from capture
+- **System tray integration** — runs silently in the background with easy access via tray icon; restore windows from tray menu
+- **Flexible deployment** — choose between installer version (with desktop shortcut) or portable executable (no installation required)
+- **Session persistence** — your hidden window preferences are remembered and restored automatically when you restart the application
+- **Clean exit** — when quitting via system tray, all previously hidden windows are automatically restored before the application closes
+- **Launch at startup** — optional setting to start Screen Shield automatically when you log into Windows
+- **Customizable appearance** — choose from four built-in themes (Default, Dark, Light, System) and switch instantly
 
 ---
 
