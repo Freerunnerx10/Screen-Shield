@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld('screenShield', {
    */
   enableAutoHideAll: (enable, names) => ipcRenderer.invoke('enable-auto-hide-all', enable, names),
 
+  /**
+   * Enable or disable the class-filtered explorer.exe hook for Task View /
+   * Alt-Tab overlay.  Pass true to start hiding XamlExplorerHostIslandWindow windows
+   * from screen capture, false to stop.
+   */
+  enableExplorerHook: (enable) => ipcRenderer.invoke('enable-explorer-hook', enable),
+
   /** Returns the OS dark-mode flag and Windows accent color for the System theme */
   getSystemTheme: () => ipcRenderer.invoke('get-system-theme'),
 
@@ -50,17 +57,29 @@ contextBridge.exposeInMainWorld('screenShield', {
   /** Returns the file:// URL of the Screen Shield logo (works in dev and packaged) */
   getLogoSrc: () => ipcRenderer.invoke('get-logo-src'),
 
-  /** Persist a single app setting (key/value) to the on-disk config file */
-  saveSetting: (key, value) => ipcRenderer.invoke('save-setting', key, value),
+/** Persist a single app setting (key/value) to the on-disk config file */
+saveSetting: (key, value) => ipcRenderer.invoke('save-setting', key, value),
 
-  /** Wipe all saved settings and re-trigger first-launch setup on next load */
-  resetSettings: () => ipcRenderer.invoke('reset-settings'),
+/** Wipe all saved settings and re-trigger first-launch setup on next load */
+resetSettings: () => ipcRenderer.invoke('reset-settings'),
 
-  /** Set or remove the Windows startup (login item) entry */
-  setLaunchAtStartup: (enable) => ipcRenderer.invoke('set-launch-at-startup', enable),
+/** Set or remove the Windows startup (login item) entry */
+setLaunchAtStartup: (enable) => ipcRenderer.invoke('set-launch-at-startup', enable),
 
-  /** Returns the current launch-at-startup state */
-  getLaunchAtStartup: () => ipcRenderer.invoke('get-launch-at-startup'),
+/** Returns the current launch-at-startup state */
+getLaunchAtStartup: () => ipcRenderer.invoke('get-launch-at-startup'),
+
+/** Add a process to the hidden processes list */
+addHiddenProcess: (name) => ipcRenderer.invoke('add-hidden-process', name),
+
+/** Remove a process from the hidden processes list */
+removeHiddenProcess: (name) => ipcRenderer.invoke('remove-hidden-process', name),
+
+/** Get the list of hidden processes */
+getHiddenProcesses: () => ipcRenderer.invoke('get-hidden-processes'),
+
+/** Check if a window is protected from screen capture */
+isWindowProtected: (hwnd) => ipcRenderer.invoke('is-window-protected', hwnd),
 
   /** Register a callback to be called when the main window is hidden */
   onAppHidden: (cb) => {

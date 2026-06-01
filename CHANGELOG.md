@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.3] - 2026-04-16
+### Fixed
+- **System-controlled state not clearing when external app removes protection** (`frontend/src/App.jsx`) — when an application (e.g. Discord) disabled its own "hide from screen capture" feature, ScreenShield continued to show the window as "system controlled hidden" with a locked toggle until fully restarted. **Root cause:** the state merge logic in both the refresh and background poll paths used `live.hidden_by ?? p.hidden_by ?? null`, which falls back to the previous React state when the backend returns `null` — since `null ?? 'system'` evaluates to `'system'`, the stale value was never cleared. Additionally, when the system-controlled flag did clear, `p.hidden` remained `true` (force-set while system-controlled), keeping the window visually hidden. **Fix:** changed to `live.hidden_by ?? null` so the backend value is always authoritative, and added transition logic so that when `hidden_by` changes from `'system'` to `null`, the window reverts to the live OS hidden state instead of the stale forced value.
+- **EPIPE crash when closing from system tray** (`main.js`) — quitting ScreenShield via the system tray icon caused an uncaught `Error: write EPIPE` dialog. **Root cause:** the `before-quit` handler called `client.send()` (which returns a Promise) inside a `try/catch` that only catches synchronous errors, then immediately called `client.stop()` which kills the backend process — the resulting EPIPE on the broken stdin pipe was an unhandled promise rejection with no `error` event listener on the stream. **Fix:** added an `error` handler on `proc.stdin` to swallow pipe errors during shutdown, replaced `try/catch` with `.catch(() => {})` on the returned promises, and added a `_stopping` guard in `send()` to reject writes immediately during shutdown.
+
+---
+
+## [1.1.2] - 2026-04-16
+### Added
+- **System-controlled hidden app detection** (`main.js`, `frontend/src/App.jsx`, `frontend/src/WindowList.jsx`, `frontend/src/WindowList.css`) — ScreenShield now detects when an application is hidden from screen capture by its own internal protection (e.g. Discord's streaming mode) rather than by ScreenShield. These windows are displayed as **"Hidden (system controlled)"** with a disabled toggle. ScreenShield will not attempt to override, toggle, or interfere with system-controlled hiding. The `hidden_by` field (`'screenShield'` | `'system'` | `null`) is annotated in the main process by cross-referencing backend-reported WDA state against ScreenShield's own tracking arrays.
+
+### Fixed
+- **Steam and system tray state not persisted across restarts** (`frontend/src/App.jsx`) — when hiding a process group (e.g. Steam), the process name is now persisted to disk via `addHiddenProcess()` so that ScreenShield correctly re-applies hiding on restart. Previously, group-level hides only updated in-memory lock sets (`lockedNamesRef`) but never called the persistence layer, causing Steam and similar tray-minimised apps to lose their hidden state after a ScreenShield restart.
+- **Startup state reconciliation** (`frontend/src/App.jsx`) — on first load, ScreenShield now fetches the persisted hidden-process list and pre-populates lock sets before rebuilding state from OS-reported flags. This handles timing races where the backend hasn't finished re-injecting hooks and ensures previously hidden processes are immediately re-locked. System-controlled hidden windows are excluded from lock-set reconstruction to prevent ScreenShield from claiming ownership of externally managed hiding.
+- **Clean shutdown now removes in-process hooks** (`main.js`) — when quitting via the system tray, ScreenShield now sends `enable-all(false)` for all persisted hidden processes to remove the in-process auto-hide hooks, ensuring no stale `WDA_EXCLUDEFROMCAPTURE` flags remain active after exit. System-controlled hidden windows are not touched during shutdown.
+- **Background poll skips system-controlled windows** (`frontend/src/App.jsx`) — the auto-hide logic in the background poll now skips windows with `hidden_by === 'system'`, preventing ScreenShield from re-hiding or interfering with applications that manage their own capture protection. The `hidden_by` field is propagated through all state update paths (refresh, poll, new window append) so the UI consistently reflects the correct ownership.
+
+---
+
+## [1.1.1] - 2026-04-16
+### Changed
+- **Renamed desktop toggle and removed Task View targeting** (`frontend/src/App.jsx`) — the "Hide desktop background and Task View from screen capture" toggle has been renamed to **"Hide desktop background from screen capture"**; the toggle no longer targets `MultitaskingViewFrame` (Task View / Alt-Tab overlay) because `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` does not actually hide the Task View or Alt-Tab switcher from screen capture — it only affects the desktop background (Program Manager window). The background poll and new-window logic have been updated to match.
+
+### Added
+- **"Hide Task View and Alt+Tab from screen capture" toggle** (`frontend/src/App.jsx`, `native-backend/payload/src/lib.rs`, `native-backend/injector/src/native.rs`) — new Advanced panel checkbox that hides the Task View (Win+Tab) and Alt+Tab switcher overlay from screen capture via a class-filtered in-process hook injected into `explorer.exe`
+  - The hook targets `XamlExplorerHostIslandWindow` (Windows 11's XAML Island window class for the Task Switching UI); the previously-targeted `MultitaskingViewFrame` class does not exist on Windows 11
+  - On enable, `WDA_EXCLUDEFROMCAPTURE` is applied proactively to the pre-existing (hidden) Task Switching window via `EnumWindows`, so it is already protected before the user presses Alt+Tab or Win+Tab
+  - The `WINEVENT_INCONTEXT` hook catches `EVENT_OBJECT_SHOW` events to re-apply WDA when the overlay becomes visible, ensuring continuous protection across sessions
+  - Explorer-mode skips cloaking (unlike normal app hiding) so the overlay remains visible to the user immediately
+
+### Fixed
+- **Desktop background hiding toggle not working** (`native-backend/injector/src/native.rs`, `frontend/src/App.jsx`) — the "Hide desktop background and Task View from screen capture" toggle was not hiding the desktop background (Program Manager window) from screen capture
+  - **Root cause:** The v1.1.0 visual-flicker fix incorrectly added `Progman` and `Shell_TrayWnd` to the backend's `EXCLUDED_CLASSES` list, preventing these windows from being returned in enumeration. Additionally, `toggleHideDesktop()` was narrowed to only target `MultitaskingViewFrame` (Alt-Tab overlay), skipping the desktop background entirely
+  - **Fix:** Removed `Progman` and `Shell_TrayWnd` from `EXCLUDED_CLASSES` so the desktop and taskbar windows are returned to the frontend. Added `Progman` to `SYSTEM_UI_CLASSES` with a synthetic title fallback. Restored `toggleHideDesktop()` to target both `Program Manager` (desktop) and `MultitaskingViewFrame` (Task View / Alt-Tab). Updated the background poll to keep both windows in sync with the desktop toggle
+  - **Impact:** Enabling the toggle now makes the desktop background appear grey/blank in screen capture software, remote desktop sessions, and similar capture mechanisms via `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`
+- **Toggle label incorrect** (`frontend/src/App.jsx`) — the Advanced panel checkbox read "Hide Task View from screen capture" instead of "Hide desktop background and Task View from screen capture"
+
+---
+
 ## [1.1.0] - 2026-04-01
 ### Added
 - **Removed glow effect from preview window** (`frontend/src/PreviewPane.jsx`, `frontend/src/PreviewPane.css`) — removed the soft glow around the preview container that reflected the dominant color of the selected screen/window. The glow used CSS variables for dynamic color updates and defaulted to red as fallback. Performance optimized to only update when selection changes.
@@ -69,7 +108,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.25] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Changed
 - **Release metadata and support links** (`package.json`, `installer.nsh`, `native-backend/injector/build.rs`, `native-backend/payload/build.rs`, `native-backend/injector/Cargo.toml`, `native-backend/payload/Cargo.toml`) — standardised all version and publisher metadata across the project for the v1.0 release:
@@ -80,7 +119,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.24] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Added
 - **Launch on Windows startup toggle** (`main.js`, `preload.js`, `frontend/src/App.jsx`, `frontend/src/App.css`) — new checkbox in the Settings panel: "Launch ScreenShield on Windows startup"; uses Electron's `app.setLoginItemSettings({ openAtLogin })` which writes the standard `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key; the setting is persisted to `ss-config.json` and the checkbox reads the actual OS login-item state on mount via `app.getLoginItemSettings().openAtLogin`
@@ -91,7 +130,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.23] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome windows visible during tab-detach drag operations** (`native-backend/payload/src/lib.rs`) — two issues caused new Chrome windows (especially during tab drag-out) to briefly appear in screen capture:
@@ -102,7 +141,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.22] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome windows could leak a single visible frame in screen capture** (`native-backend/payload/src/lib.rs`) — the INCONTEXT hook applied `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` + DWM cloak at CREATE time, but only applied WDA (no cloak) at SHOW time; if CREATE and SHOW fired in rapid succession, or WDA had not yet propagated by SHOW, the window could appear in capture for 1–3 DWM composition cycles
@@ -112,7 +151,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.21] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome windows not hidden instantly — individual toggle left windows permanently cloaked** (`native-backend/payload/src/lib.rs`) — the INCONTEXT hook applied WDA + DWM cloak at CREATE time but relied on the OUTOFCONTEXT watcher in cli.rs to schedule the uncloak 80 ms later; when Chrome was hidden via the individual eye toggle, chrome.exe was not added to `WATCH_NAMES`, so the OUTOFCONTEXT handler's `check_and_cache_match()` returned false and skipped the uncloak entirely; the window stayed permanently cloaked (invisible to the user)
@@ -122,7 +161,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.20] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Changed
 - **Combined desktop and Task View into a single toggle** (`frontend/src/App.jsx`, `frontend/src/StatusBar.jsx`) — Windows renders Task View (Win+Tab) and Alt-Tab within the DWM desktop compositor layer; when the desktop surface is hidden from capture, Task View is hidden as well, making separate toggles misleading
@@ -134,7 +173,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.19] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Alt-Tab capture toggle not working correctly — inconsistent state** (`frontend/src/App.jsx`, `native-backend/injector/src/native.rs`, `native-backend/injector/src/cli.rs`) — disabling the "Hide Alt-Tab Switching" toggle did not restore normal capture visibility; the overlay remained hidden and other explorer.exe windows (File Explorer, taskbar) could become persistently hidden
@@ -144,7 +183,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.18] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome windows not hidden instantly — visible for 1–3 frames in capture** (`native-backend/payload/src/lib.rs`, `native-backend/injector/src/cli.rs`) — the INCONTEXT hook applied `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` synchronously at CREATE time, but WDA takes 1–3 DWM composition cycles to propagate; during the propagation gap, the window was visible in screen capture; Steam windows were not affected because new Steam processes go through the full pipeline (which uses DWM cloaking) before any window is composited
@@ -156,7 +195,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.17] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **"Hide Alt-Tab Switching from Screen Capture" toggle not working** (`frontend/src/App.jsx`) — the Alt-Tab overlay (`MultitaskingViewFrame`) is a transient `explorer.exe` window that only exists while the user holds Alt-Tab; the toggle callback called `windows.filter(isAltTabWin)` to find targets, but the overlay was never in the list when the checkbox was clicked, so no hide/unhide IPC calls were dispatched
@@ -166,7 +205,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.16] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **File Explorer automatically hidden on startup after reset** (`frontend/src/App.jsx`) — the session restore logic added HWNDs from all hidden windows to `lockedHwndsRef`, including `explorer.exe` system windows (desktop background, taskbar, Alt-Tab overlay); since File Explorer windows are also `explorer.exe` processes, any File Explorer window that shared a locked HWND was auto-hidden by the background poll; the PID and process-name guards already skipped `explorer.exe`, but the HWND guard was missing
@@ -175,7 +214,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.15] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome tab-detach windows become invisible and uninteractable** (`native-backend/payload/src/lib.rs`, `native-backend/injector/src/cli.rs`) — the INCONTEXT hook applied DWM cloaking (`DwmSetWindowAttribute(DWMWA_CLOAK)`) at CREATE time to bridge the WDA propagation gap, but the delayed uncloak mechanism in the OUTOFCONTEXT watcher was unreliable; Chrome windows created via tab detach stayed cloaked, making them invisible and impossible to interact with
@@ -186,14 +225,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.14] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Changed
 - **README restructured with professional open-source layout** (`README.md`) — added centered logo, application title, and short description at the top; added dynamic GitHub badges (latest release, total downloads, stars, license); added centered section navigation links; cleaned up the License and Acknowledgements section to remove excessive spacing and improve readability
 
 ---
 
-## [1.00.13] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Hidden Chrome windows reappear off-screen or become unusable after tab detach** (`native-backend/injector/src/cli.rs`) — v1.00.12 removed the WDA affinity short-circuit entirely, forcing ALL windows from watched processes through the full off-screen + inject pipeline; this broke Chrome's tab-drag snapping behaviour because `SetWindowPos(-32000, -32000)` moved newly-created windows to invalid coordinates that Chrome could not recover from
@@ -203,7 +242,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.12] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Chrome windows still visible for several frames when spawned** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — the OUTOFCONTEXT watcher had a WDA affinity short-circuit: when the in-process INCONTEXT hook had already applied `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, the watcher skipped the full cloak + off-screen + inject pipeline; however, WDA takes 1–3 DWM composition cycles to propagate, so the window was visible in capture during that gap; this is why Steam (which always goes through the full pipeline) hid windows instantly while Chrome (which hit the short-circuit) did not
@@ -212,7 +251,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.11] - 2026-03-11
+## [1.0.0] - 2026-03-11
 
 ### Fixed
 - **Splash screen appears late and UI elements disappear during startup** (`main.js`, `splash.html`, `preload-splash.js`) — the splash had a hardcoded 2500 ms `setTimeout` that faded out the logo, title, and spinner regardless of whether backend initialisation had finished; if Defender exclusions or backend startup took longer than 2.5 s the splash content vanished while the window frame and copyright text remained, leaving an empty shell until the main window appeared
@@ -223,7 +262,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.10] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **New windows from hidden apps visible for 1–3 frames in screen capture** (`native-backend/payload/src/lib.rs`) — the in-process INCONTEXT hook applied `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` at CREATE time, but WDA must propagate to DWM which takes 1–3 composition cycles (~1–5 ms at 60 Hz); during this gap the window content could appear in capture; added DWM cloaking (`DwmSetWindowAttribute(DWMWA_CLOAK)`) as an instant bridge:
@@ -233,7 +272,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.9] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Splash screen not rendering instantly on startup** (`main.js`) — the splash window was created AFTER `await addDefenderExclusions()` (up to 8 seconds of PowerShell blocking) and `client.start()`, so the user saw nothing during heavy initialisation; refactored startup into three phases:
@@ -247,7 +286,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.8] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **New windows from hidden apps briefly flash in screen capture** (`native-backend/payload/src/lib.rs`, `native-backend/injector/src/cli.rs`) — two race conditions allowed a 10–200 ms window where new Chrome tabs, dragged-out windows, or Steam overlay windows would appear in capture before being hidden:
@@ -256,14 +295,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.7] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **Maximize button removed from title bar** (`main.js`) — stripped the `WS_MAXIMIZEBOX` window style via Win32 `SetWindowLong` after window creation so Windows renders only the minimize and close buttons; Electron's `maximizable: false` greys out the button but cannot remove it; falls back silently to the greyed-out state if the style update fails
 
 ---
 
-## [1.00.6] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Splash screen not appearing on top** (`main.js`) — the splash `BrowserWindow` was created without `alwaysOnTop`, so it could be obscured by other windows on the desktop during startup; added `alwaysOnTop: true` and `skipTaskbar: true` so the splash is always visible and does not add a redundant taskbar entry
@@ -273,7 +312,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.5] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Hidden apps (e.g. Chrome) appear transparent / do not paint** (`native-backend/payload/src/lib.rs`, `native-backend/injector/src/cli.rs`) — the in-process WinEvent hook and the out-of-context watcher were processing **child windows** (e.g. Chrome's `Chrome_RenderWidgetHostHWND` rendering surface) alongside top-level application windows; `SetWindowDisplayAffinity` silently fails on child HWNDs (the API only supports top-level windows), so the out-of-context watcher saw no WDA set and ran the full off-screen-move + DWM-cloak + inject pipeline on the child — repositioning Chrome's internal rendering surface to (-32000, -32000) and causing the parent browser window to appear transparent; added `WS_CHILD` style checks to skip child windows in all three code paths:
@@ -283,7 +322,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.4] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Defender false-positive quarantine on portable/dev builds** — `ScreenShieldHelper.exe` was detected as `Behavior:Win32/DefenseEvasion.A!ml` and quarantined when running from `AppData\Local\Temp` (portable) or the project directory (dev); the existing NSIS installer exclusion only covers the installed path (`$INSTDIR`) and does not apply to these locations
@@ -299,14 +338,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.3] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Windows App User Model ID** (`main.js`) — added `app.setAppUserModelId('com.screenshield.app')` before `app.whenReady()` to explicitly pin the AUMID; without this Windows derives it from the executable name at runtime, which can cause inconsistent taskbar grouping and Task Manager entries; `executableName` remains `"Screen Shield"` so the process continues to appear as `Screen Shield` in Task Manager and the Apps list
 
 ---
 
-## [1.00.2] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **Rust release profile** (`native-backend/Cargo.toml`) — added `[profile.release]` with `strip = "symbols"`, `lto = "thin"`, and `codegen-units = 1`; reduces binary size and removes internal symbol strings that ML-based AV heuristics key on
@@ -315,14 +354,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.00.1] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **README license section** — restructured into a `## License` block with a separate `### Acknowledgements` sub-section; replaced the inline attribution sentence with a clear statement that code is derived from the [InvisWind](https://github.com/radiantly/invisiwind) project by radiantly, licensed under the MIT License, with a reference to `THIRD_PARTY_NOTICES` for full details
 
 ---
 
-## [1.00] - 2026-03-10 — Initial Public Release
+## [1.0.0] - 2026-03-10 — Initial Public Release
 
 ### Summary
 First stable public release. Incorporates all features, fixes, and refinements developed across the v1.0.x pre-release series.
@@ -344,14 +383,14 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.11] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Splash screen logo visibility on light themes** — added `filter: drop-shadow(0 2px 8px rgba(0,0,0,0.35))` to the `.logo` rule in `splash.html`; `drop-shadow` follows the image's alpha channel so the shadow renders only around the visible parts of the logo, keeping it legible on both light and dark backgrounds
 
 ---
 
-## [1.0.10] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **Settings reset button** — expanded the "Reset to first-launch setup" button into a full application reset:
@@ -362,14 +401,14 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.9] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Removed
 - **"Reset to First-Launch Setup" tray menu item** — removed from the system tray context menu; the tray menu now contains only "Show Screen Shield" and "Quit"; the reset action remains accessible via the Settings panel
 
 ---
 
-## [1.0.8] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Removed
 - **Tray icon theme-based modification** — removed `invertNativeImage`, `updateTrayIcon`, and the `originalTrayIcon` module-level variable from `main.js`; the tray icon now always uses the original asset unchanged regardless of the active theme
@@ -378,7 +417,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.7] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **Light theme accent color** — replaced the red accent (`#cc0000` / `#990000`) with a dark blue (`#0060c7` / `#004ea3`) that provides clear contrast on light backgrounds (≥5.5:1 on white) and is consistent with the neutral palette of a light UI; all dependent tokens updated:
@@ -390,7 +429,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.6] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Tray icon not updating on theme change** — `invertNativeImage` was calling `nativeImage.createFromBuffer()` on raw BGRA pixel data returned by `img.toBitmap()`; `createFromBuffer` expects PNG/JPEG-encoded data and produced a corrupt/empty image, so the light-theme inversion had no visible effect; replaced with `nativeImage.createFromBitmap(buffer, { width, height })` which correctly interprets raw BGRA pixels
@@ -404,7 +443,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.5] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **Capture hook DLL renamed** — `utils.dll` renamed to `ScreenShieldHook.dll` across `payload/Cargo.toml`, `injector/src/native.rs`, `injector/src/cli.rs`, and `package.json`; the generic name `utils.dll` is a known heuristic hit in several AV signature databases (including Microsoft Defender) because it matches filenames commonly used by malware payloads; a product-specific name avoids this pattern match
@@ -420,7 +459,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.4] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **System theme accent color** — `nativeTheme.accentColor` (not a real Electron API property) replaced with `systemPreferences.getAccentColor()`, which correctly returns the Windows personalization accent colour in RRGGBBAA hex; the System theme now reflects the user's actual Windows accent colour instead of always falling back to blue
@@ -432,7 +471,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.3] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Fixed
 - **Light theme text readability** — all hardcoded dark hex colours (`#161616`, `#202020`, `#363636`, etc.) in `WindowList.css`, `App.css`, `PreviewPane.css`, and `StatusBar.css` replaced with CSS variable references (`var(--surface)`, `var(--surface-hover)`, `var(--border)`, `var(--text)`, etc.); the Light theme is now fully legible with dark text on light backgrounds
@@ -451,7 +490,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.2] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Changed
 - **First-launch setup — live theme preview** — selecting a theme on the setup screen now applies it to the app immediately; the setup overlay uses a semi-transparent blurred backdrop (`rgba(0,0,0,0.72)` + `backdrop-filter: blur(8px)`) so the theme change is visible on the app interface behind it in real time
@@ -461,7 +500,7 @@ First stable public release. Incorporates all features, fixes, and refinements d
 
 ---
 
-## [1.0.1] - 2026-03-10
+## [1.0.0] - 2026-03-10
 
 ### Added
 - **Settings panel** — gear icon in the top-right of the Preview header opens a modal settings panel; dismisses on backdrop click or the × button

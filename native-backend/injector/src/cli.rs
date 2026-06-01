@@ -4,19 +4,19 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
-use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GWL_STYLE, GetMessageW, GetWindowDisplayAffinity, GetWindowLongW,
-    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, MSG, PostThreadMessageW,
-    SetWindowPos, TranslateMessage, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_QUIT, WS_CHILD,
+    DispatchMessageW, GetMessageW, GetWindowDisplayAffinity, GetWindowLongW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostThreadMessageW, SetWindowPos,
+    TranslateMessage, GWL_STYLE, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_QUIT, WS_CHILD,
 };
 
 // WinEvent constants not re-exported in this windows-rs version
 const EVENT_OBJECT_CREATE: u32 = 0x8000;
 const EVENT_OBJECT_SHOW: u32 = 0x8002;
-const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;  // async delivery via message pump
+const WINEVENT_OUTOFCONTEXT: u32 = 0x0000; // async delivery via message pump
 const WINEVENT_SKIPOWNPROCESS: u32 = 0x0002; // don't call back for events from this process
 
 // DWMWA_CLOAK (13) makes a window's content invisible in all screen captures
@@ -39,8 +39,7 @@ static WATCHER_THREAD_ID: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0))
 /// HWNDs currently being processed by a hide thread.
 /// Prevents CREATE and SHOW callbacks from racing on the same window — the
 /// second event to arrive finds the HWND already in the set and returns early.
-static PROCESSING: LazyLock<Mutex<HashSet<u32>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+static PROCESSING: LazyLock<Mutex<HashSet<u32>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Returns true if the process with the given PID matches the active watch list.
 /// Only direct process-name matching is used — no parent-PID cascading.
@@ -79,7 +78,8 @@ fn schedule_delayed_uncloak(hwnd: HWND) {
         let uncloak_val: u32 = 0;
         let _ = unsafe {
             DwmSetWindowAttribute(
-                hwnd, DWMWA_CLOAK,
+                hwnd,
+                DWMWA_CLOAK,
                 &uncloak_val as *const u32 as *const _,
                 std::mem::size_of::<u32>() as u32,
             )
@@ -134,7 +134,8 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
     let cloak_val: u32 = 1;
     let _ = unsafe {
         DwmSetWindowAttribute(
-            hwnd, DWMWA_CLOAK,
+            hwnd,
+            DWMWA_CLOAK,
             &cloak_val as *const u32 as *const _,
             std::mem::size_of::<u32>() as u32,
         )
@@ -153,7 +154,12 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
     // capture tool, the window's content is outside the visible area.
     let _ = unsafe {
         SetWindowPos(
-            hwnd, None, -32000, -32000, 0, 0,
+            hwnd,
+            None,
+            -32000,
+            -32000,
+            0,
+            0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         )
     };
@@ -166,7 +172,11 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
         eprintln!("[SS] INJECT  hwnd={:#010x} pid={}", hwnd_u32, pid);
         let inject_ok =
             native::Injector::set_window_props_with_pid(pid, hwnd_u32, true, None).is_ok();
-        eprintln!("[SS] {}   hwnd={:#010x}", if inject_ok { "OK    " } else { "FAIL  " }, hwnd_u32);
+        eprintln!(
+            "[SS] {}   hwnd={:#010x}",
+            if inject_ok { "OK    " } else { "FAIL  " },
+            hwnd_u32
+        );
 
         // After per-window injection, also install the in-process hook in every
         // other running process with the same executable name (e.g., all
@@ -194,7 +204,12 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
                     eprintln!("[SS] RESTORE hwnd={:#010x} -> ({}, {})", hwnd_u32, x, y);
                     let _ = unsafe {
                         SetWindowPos(
-                            hwnd, None, x, y, 0, 0,
+                            hwnd,
+                            None,
+                            x,
+                            y,
+                            0,
+                            0,
                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                         )
                     };
@@ -209,7 +224,8 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
         let uncloak_val: u32 = 0;
         let _ = unsafe {
             DwmSetWindowAttribute(
-                hwnd, DWMWA_CLOAK,
+                hwnd,
+                DWMWA_CLOAK,
                 &uncloak_val as *const u32 as *const _,
                 std::mem::size_of::<u32>() as u32,
             )
@@ -266,7 +282,10 @@ unsafe extern "system" fn on_window_create(
         return;
     }
 
-    eprintln!("[SS] CREATE  hwnd={:#010x} pid={}", hwnd.0 as usize as u32, pid);
+    eprintln!(
+        "[SS] CREATE  hwnd={:#010x} pid={}",
+        hwnd.0 as usize as u32, pid
+    );
     handle_window_event(hwnd, pid);
 }
 
@@ -316,7 +335,10 @@ unsafe extern "system" fn on_window_show(
         return;
     }
 
-    eprintln!("[SS] SHOW    hwnd={:#010x} pid={}", hwnd.0 as usize as u32, pid);
+    eprintln!(
+        "[SS] SHOW    hwnd={:#010x} pid={}",
+        hwnd.0 as usize as u32, pid
+    );
     handle_window_event(hwnd, pid);
 }
 
@@ -358,8 +380,7 @@ pub fn start() {
                 // Only add a process entry when the PID has no visible window already.
                 let existing_pids: std::collections::HashSet<u32> =
                     windows.iter().map(|w| w.pid).collect();
-                let tray_entries =
-                    native::get_processes_by_name(&proc_names, &existing_pids);
+                let tray_entries = native::get_processes_by_name(&proc_names, &existing_pids);
                 windows.extend(tray_entries);
             }
         }
@@ -378,10 +399,7 @@ pub fn start() {
     if args.contains(&"--enable-all".to_string()) {
         let mut iter = args.iter().skip_while(|a| *a != "--enable-all").peekable();
         iter.next(); // skip "--enable-all"
-        let enable = iter
-            .next()
-            .map(|s| s == "1")
-            .unwrap_or(false);
+        let enable = iter.next().map(|s| s == "1").unwrap_or(false);
         for name in iter.filter(|a| !a.starts_with("--")) {
             native::Injector::apply_auto_hide_for_name(name, enable);
         }
@@ -468,7 +486,11 @@ pub fn start() {
 
     // --taskbar: also apply HideFromTaskbar (hides from Alt+Tab / taskbar)
     let taskbar_flag = args.contains(&"--taskbar".to_string());
-    let hide_from_taskbar: Option<bool> = if taskbar_flag { Some(should_hide) } else { None };
+    let hide_from_taskbar: Option<bool> = if taskbar_flag {
+        Some(should_hide)
+    } else {
+        None
+    };
 
     // Positional args (everything that isn't a --flag) are targets
     let targets: Vec<String> = args.into_iter().filter(|a| !a.starts_with("--")).collect();
@@ -482,8 +504,7 @@ pub fn start() {
     let all_windows = native::get_top_level_windows();
 
     // hwnd → pid
-    let hwnd_to_pid: HashMap<u32, u32> =
-        all_windows.iter().map(|w| (w.hwnd, w.pid)).collect();
+    let hwnd_to_pid: HashMap<u32, u32> = all_windows.iter().map(|w| (w.hwnd, w.pid)).collect();
 
     // pid → [hwnd, …]
     let pid_to_hwnds: HashMap<u32, Vec<u32>> = {
@@ -498,9 +519,12 @@ pub fn start() {
         if let Ok(n) = target.parse::<u32>() {
             // Priority 1: treat as hwnd (fast O(1) lookup)
             if let Some(&pid) = hwnd_to_pid.get(&n) {
-                if let Err(e) =
-                    native::Injector::set_window_props_with_pid(pid, n, should_hide, hide_from_taskbar)
-                {
+                if let Err(e) = native::Injector::set_window_props_with_pid(
+                    pid,
+                    n,
+                    should_hide,
+                    hide_from_taskbar,
+                ) {
                     eprintln!("Error (hwnd {}): {:?}", n, e);
                 }
                 continue;
@@ -509,9 +533,12 @@ pub fn start() {
             // Priority 2: treat as PID – hide/unhide all windows of that process
             if let Some(hwnds) = pid_to_hwnds.get(&n) {
                 for &hwnd in hwnds {
-                    if let Err(e) =
-                        native::Injector::set_window_props_with_pid(n, hwnd, should_hide, hide_from_taskbar)
-                    {
+                    if let Err(e) = native::Injector::set_window_props_with_pid(
+                        n,
+                        hwnd,
+                        should_hide,
+                        hide_from_taskbar,
+                    ) {
                         eprintln!("Error (pid {} hwnd {}): {:?}", n, hwnd, e);
                     }
                 }
@@ -537,10 +564,7 @@ pub fn start() {
                                     should_hide,
                                     hide_from_taskbar,
                                 ) {
-                                    eprintln!(
-                                        "Error (name '{}' hwnd {}): {:?}",
-                                        target, hwnd, e
-                                    );
+                                    eprintln!("Error (name '{}' hwnd {}): {:?}", target, hwnd, e);
                                 }
                             }
                         } else {
@@ -580,17 +604,23 @@ fn spawn_watcher_pump_thread() -> u32 {
 
         let hook_show = unsafe {
             SetWinEventHook(
-                EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW,
-                None, Some(on_window_show),
-                0, 0,
+                EVENT_OBJECT_SHOW,
+                EVENT_OBJECT_SHOW,
+                None,
+                Some(on_window_show),
+                0,
+                0,
                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
             )
         };
         let hook_create = unsafe {
             SetWinEventHook(
-                EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE,
-                None, Some(on_window_create),
-                0, 0,
+                EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_CREATE,
+                None,
+                Some(on_window_create),
+                0,
+                0,
                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
             )
         };
@@ -601,8 +631,12 @@ fn spawn_watcher_pump_thread() -> u32 {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            if !hook_show.is_invalid() { let _ = UnhookWinEvent(hook_show); }
-            if !hook_create.is_invalid() { let _ = UnhookWinEvent(hook_create); }
+            if !hook_show.is_invalid() {
+                let _ = UnhookWinEvent(hook_show);
+            }
+            if !hook_create.is_invalid() {
+                let _ = UnhookWinEvent(hook_create);
+            }
         }
     });
     rx.recv().unwrap_or(0)
@@ -639,7 +673,7 @@ fn restart_watcher() {
 ///   watch       params: {names: string[]}
 ///   stop-watch  params: {}
 ///   enable-all  params: {enable: bool, names: string[]}
-fn serve() {
+fn serve() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::{BufRead, BufReader, Write};
 
     #[derive(serde::Deserialize)]
@@ -666,6 +700,16 @@ fn serve() {
         };
 
         let result: Result<serde_json::Value, String> = match req.cmd.as_str() {
+            // ── is-window-protected ───────────────────────────────────────
+            "is-window-protected" => {
+                let hwnd: u32 = req.params["hwnd"]
+                    .as_u64()
+                    .map(|n| n as u32)
+                    .ok_or_else(|| "Missing or invalid hwnd parameter")?;
+                let protected = native::is_window_capture_protected(hwnd);
+                serde_json::to_value(protected).map_err(|e| e.to_string())
+            }
+
             // ── list ────────────────────────────────────────────────────────
             "list" => {
                 let proc_names: Vec<String> = req.params["proc_names"]
@@ -679,12 +723,9 @@ fn serve() {
 
                 let mut windows = native::get_top_level_windows();
                 if !proc_names.is_empty() {
-                    let existing_pids: HashSet<u32> =
-                        windows.iter().map(|w| w.pid).collect();
-                    let pn_refs: Vec<&str> =
-                        proc_names.iter().map(|s| s.as_str()).collect();
-                    let tray =
-                        native::get_processes_by_name(&pn_refs, &existing_pids);
+                    let existing_pids: HashSet<u32> = windows.iter().map(|w| w.pid).collect();
+                    let pn_refs: Vec<&str> = proc_names.iter().map(|s| s.as_str()).collect();
+                    let tray = native::get_processes_by_name(&pn_refs, &existing_pids);
                     windows.extend(tray);
                 }
                 serde_json::to_value(windows).map_err(|e| e.to_string())
@@ -715,9 +756,22 @@ fn serve() {
                     if pid == 0 {
                         continue;
                     }
-                    let _ = native::Injector::set_window_props_with_pid(
-                        pid, hwnd, should_hide, hide_from_taskbar,
+                    let result = native::Injector::set_window_props_with_pid(
+                        pid,
+                        hwnd,
+                        should_hide,
+                        hide_from_taskbar,
                     );
+                    match result {
+                        Ok(_) => eprintln!(
+                            "[Serve] Injection succeeded for hwnd={:#010x} pid={}",
+                            hwnd, pid
+                        ),
+                        Err(e) => eprintln!(
+                            "[Serve] Injection failed for hwnd={:#010x} pid={}: {:?}",
+                            hwnd, pid, e
+                        ),
+                    }
                 }
                 Ok(serde_json::Value::Null)
             }
@@ -763,6 +817,14 @@ fn serve() {
                 Ok(serde_json::Value::Null)
             }
 
+            // ── enable-explorer-hook ─────────────────────────────────────
+            "enable-explorer-hook" => {
+                let enable = req.params["enable"].as_bool().unwrap_or(false);
+                native::Injector::enable_explorer_hook(enable)
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(|e| e.to_string())
+            }
+
             other => Err(format!("unknown command: {other}")),
         };
 
@@ -777,4 +839,5 @@ fn serve() {
 
     // stdin closed — shut down the watcher thread before exiting.
     stop_watcher_thread();
+    Ok(())
 }

@@ -14,7 +14,7 @@ use {
   <assemblyIdentity
       type="win32"
       name="ScreenShieldBackgroundService"
-      version="1.0.0.0"
+      version="1.1.1.0"
       processorArchitecture="amd64"/>
   <description>ScreenShield Background Service</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
@@ -41,8 +41,8 @@ fn main() -> io::Result<()> {
              .set("CompanyName",      "Freerunnerx10")
              .set("LegalCopyright",   "Copyright \u{00a9} 2026 Freerunnerx10")
              .set("OriginalFilename", "ScreenShieldBackgroundService.exe")
-             .set("FileVersion",      "1.0.0.0")
-             .set("ProductVersion",   "1.0.0")
+             .set("FileVersion",      "1.1.1.0")
+             .set("ProductVersion",   "1.1.1")
              .set_manifest(MANIFEST)
              .compile()?;
      }

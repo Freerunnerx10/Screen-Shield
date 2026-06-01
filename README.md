@@ -57,8 +57,8 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 
 | Build | Description |
 |---|---|
-| **`ScreenShield_Setup_v1.1.0.exe`** | Installer (recommended) — installs to Program Files with desktop shortcut |
-| **`ScreenShield_Portable_v1.1.0.exe`** | Portable executable — no installation required |
+| **`ScreenShield_Setup_v1.1.1.exe`** | Installer (recommended) — installs to Program Files with desktop shortcut |
+| **`ScreenShield_Portable_v1.1.1.exe`** | Portable executable — no installation required |
 
 > **NOTE:**
 > Administrator privileges are recommended. Without elevation, hiding windows owned by other users or high-integrity processes will not work.

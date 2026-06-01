@@ -2,28 +2,44 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+use windows::core::{BOOL, PCWSTR};
 use windows::Win32::{
-    Foundation::{HMODULE, HWND},
+    Foundation::{HMODULE, HWND, LPARAM, TRUE},
     Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE},
     System::{
         LibraryLoader::{
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            GetModuleHandleExW,
         },
         Threading::GetCurrentProcessId,
     },
     UI::{
-        Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
+        Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
         WindowsAndMessaging::{
-            GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetWindowDisplayAffinity, GetWindowLongW,
-            IsWindow, SetWindowDisplayAffinity, SetWindowLongW, SetWindowPos, SWP_FRAMECHANGED,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WS_CHILD,
+            EnumWindows, GetClassNameW, GetWindowDisplayAffinity, GetWindowLongW,
+            IsWindow, SetWindowDisplayAffinity, SetWindowLongW,
+            SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WS_CHILD,
             WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_VISIBLE,
         },
     },
 };
-use windows::core::PCWSTR;
+
+/// Append a diagnostic line to %TEMP%\screenshield-hook.log.
+/// Runs inside explorer.exe where stderr is not visible.
+fn debug_log(msg: &str) {
+    use std::io::Write;
+    if let Ok(tmp) = std::env::var("TEMP") {
+        let path = std::path::Path::new(&tmp).join("screenshield-hook.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(f, "[SS-Hook] {}", msg);
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn SetWindowVisibility(hwnd: HWND, hide: bool) -> bool {
@@ -33,7 +49,18 @@ pub extern "system" fn SetWindowVisibility(hwnd: HWND, hide: bool) -> bool {
         WDA_NONE
     };
     let result = unsafe { SetWindowDisplayAffinity(hwnd, dwaffinity) };
-    return !result.is_err();
+    let success = !result.is_err();
+    eprintln!(
+        "[SS] SetWindowDisplayAffinity hwnd={:#010x} hide={} success={}",
+        hwnd.0 as u32, hide, success
+    );
+    if !success {
+        eprintln!(
+            "[SS] SetWindowDisplayAffinity failed with error: {:?}",
+            result.err()
+        );
+    }
+    return success;
 }
 
 #[unsafe(no_mangle)]
@@ -52,7 +79,15 @@ pub extern "system" fn HideFromTaskbar(hwnd: HWND, hide: bool) -> bool {
     unsafe { SetWindowLongW(hwnd, GWL_EXSTYLE, style) };
     // Flush the style change — without this Win32 may not update Alt+Tab / taskbar state
     let _ = unsafe {
-        SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        )
     };
     true
 }
@@ -89,6 +124,10 @@ const DWMWA_CLOAK: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(13);
 static HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Raw HWINEVENTHOOK pointer stored as usize for lock-free atomic access.
 static HOOK_HANDLE: AtomicUsize = AtomicUsize::new(0);
+/// When true, the in-process hook only applies WDA to windows whose class
+/// matches a hardcoded whitelist (currently just `MultitaskingViewFrame`).
+/// Used for explorer.exe where the blanket hook would hide system UI.
+static EXPLORER_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Check whether WDA_EXCLUDEFROMCAPTURE is active on the given window.
 unsafe fn is_wda_active(hwnd: HWND) -> bool {
@@ -105,7 +144,8 @@ unsafe fn cloak_and_schedule_uncloak(hwnd: HWND) {
     let cloak_val: u32 = 1;
     let _ = unsafe {
         DwmSetWindowAttribute(
-            hwnd, DWMWA_CLOAK,
+            hwnd,
+            DWMWA_CLOAK,
             &cloak_val as *const u32 as *const _,
             std::mem::size_of::<u32>() as u32,
         )
@@ -135,7 +175,8 @@ unsafe fn cloak_and_schedule_uncloak(hwnd: HWND) {
         let uncloak_val: u32 = 0;
         let _ = unsafe {
             DwmSetWindowAttribute(
-                hwnd, DWMWA_CLOAK,
+                hwnd,
+                DWMWA_CLOAK,
                 &uncloak_val as *const u32 as *const _,
                 std::mem::size_of::<u32>() as u32,
             )
@@ -175,15 +216,37 @@ unsafe extern "system" fn in_process_hook(
     if style & WS_CHILD.0 as i32 != 0 {
         return;
     }
-    // Skip system shell windows that must never be capture-excluded.  Hiding
-    // Progman or WorkerW blacks out the desktop; Shell_TrayWnd is the taskbar.
+    // Get the window class for filtering decisions.
     let mut class_buf = [0u16; 128];
     let class_len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
     if class_len > 0 {
         let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
-        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
-            return;
+        if EXPLORER_MODE.load(Ordering::Relaxed) {
+            // Explorer mode: ONLY process XamlExplorerHostIslandWindow (Task View /
+            // Alt-Tab overlay).  Skip everything else so File Explorer windows,
+            // taskbar popups, notification areas, etc. are unaffected.
+            // Note: Windows 11 uses XamlExplorerHostIslandWindow (not the older
+            // MultitaskingViewFrame from Windows 10).  The _WASDK variant is a
+            // different control and must be excluded.
+            if class.as_str() == "XamlExplorerHostIslandWindow" {
+                debug_log(&format!(
+                    "HOOK HIT: XamlExplorerHostIslandWindow hwnd={:#010x} event={:#x} style={:#x}",
+                    hwnd.0 as u32, event, style
+                ));
+            } else {
+                return;
+            }
+        } else {
+            // Normal mode: skip system shell windows that must never be
+            // capture-excluded.  Hiding Progman or WorkerW blacks out the
+            // desktop; Shell_TrayWnd is the taskbar.
+            if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
+                return;
+            }
         }
+    } else if EXPLORER_MODE.load(Ordering::Relaxed) {
+        // Explorer mode but we couldn't read the class — skip to be safe.
+        return;
     }
     // On SHOW events, verify the window is actually becoming visible before
     // applying capture exclusion — mirrors the C example in the design doc.
@@ -208,12 +271,21 @@ unsafe extern "system" fn in_process_hook(
     // Check whether WDA was already set BEFORE we apply it.  This tells us
     // if a previous event (typically CREATE) already applied WDA, meaning
     // DWM has had at least one composition cycle to propagate the change.
-    // If wda_was_set is false, WDA is being applied for the first time for
-    // this window (e.g. CREATE was skipped because Chrome initially created
-    // it as a child window and later promoted it to top-level), so we need
-    // DWM cloaking to bridge the propagation gap.
     let wda_was_set = unsafe { is_wda_active(hwnd) };
-    let _ = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) };
+    let wda_result = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) };
+
+    // In explorer mode (targeting XamlExplorerHostIslandWindow), skip the
+    // cloak+uncloak dance.  The user needs the Task View / Alt-Tab overlay
+    // visible immediately; cloaking it would hide it from the user for ~80ms
+    // on every appearance.  The WDA propagation delay is acceptable.
+    if EXPLORER_MODE.load(Ordering::Relaxed) {
+        let wda_now = unsafe { is_wda_active(hwnd) };
+        debug_log(&format!(
+            "WDA applied: hwnd={:#010x} result={:?} wda_was_set={} wda_now={}",
+            hwnd.0 as u32, wda_result, wda_was_set, wda_now
+        ));
+        return;
+    }
 
     if event == EVENT_OBJECT_CREATE {
         // Always cloak at CREATE — first opportunity to protect the window.
@@ -223,6 +295,81 @@ unsafe extern "system" fn in_process_hook(
         // failed.  Cloak to bridge the WDA propagation gap.
         unsafe { cloak_and_schedule_uncloak(hwnd) };
     }
+}
+
+/// Check whether `hwnd` is a Task View / Alt-Tab overlay window.
+/// Matches class `XamlExplorerHostIslandWindow` (exact — excludes the `_WASDK`
+/// variant which is a different control).
+fn is_task_switching_window(hwnd: HWND) -> bool {
+    let mut class_buf = [0u16; 128];
+    let class_len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
+    if class_len == 0 {
+        return false;
+    }
+    let class = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+    class == "XamlExplorerHostIslandWindow"
+}
+
+/// Apply or remove WDA_EXCLUDEFROMCAPTURE on all existing
+/// `XamlExplorerHostIslandWindow` windows in the current process.
+/// Called once when the explorer hook is first enabled so that the
+/// pre-existing (hidden) Task View window is protected before the user
+/// ever presses Alt+Tab or Win+Tab.
+fn apply_wda_to_existing_task_view_windows(enable: bool) {
+    let affinity = if enable {
+        WDA_EXCLUDEFROMCAPTURE
+    } else {
+        WDA_NONE
+    };
+    let our_pid = unsafe { GetCurrentProcessId() };
+    unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let (target_pid, affinity_val) = &*(lparam.0 as *const (u32, u32));
+            let mut pid = 0u32;
+            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == *target_pid && is_task_switching_window(hwnd) {
+                let result = SetWindowDisplayAffinity(hwnd, windows::Win32::UI::WindowsAndMessaging::WINDOW_DISPLAY_AFFINITY(*affinity_val));
+                debug_log(&format!(
+                    "apply_wda_existing: hwnd={:#010x} affinity={:#x} result={:?}",
+                    hwnd.0 as u32, affinity_val, result
+                ));
+            }
+            TRUE // continue enumeration
+        }
+    }
+    let ctx = (our_pid, affinity.0);
+    let _ = unsafe {
+        EnumWindows(
+            Some(enum_cb),
+            LPARAM(&ctx as *const _ as isize),
+        )
+    };
+}
+
+/// Enable or disable the in-process hook in explorer-mode (class-filtered).
+///
+/// Like `EnableAutoHide`, but sets `EXPLORER_MODE = true` so the hook callback
+/// only applies WDA_EXCLUDEFROMCAPTURE to `XamlExplorerHostIslandWindow` windows
+/// (Task View / Alt-Tab overlay).  All other explorer.exe windows (File
+/// Explorer, taskbar popups, notification centre, etc.) are left untouched.
+///
+/// Call with `enable = true` when the user enables Task View hiding.
+/// Call with `enable = false` to stop hiding new Task View windows.
+#[unsafe(no_mangle)]
+pub extern "system" fn EnableExplorerAutoHide(enable: bool) -> bool {
+    debug_log(&format!("EnableExplorerAutoHide({}) called", enable));
+    if enable {
+        EXPLORER_MODE.store(true, Ordering::SeqCst);
+    }
+    // Apply WDA to any existing Task View windows immediately — the window
+    // already exists (hidden) and will only become visible on Alt+Tab/Win+Tab.
+    apply_wda_to_existing_task_view_windows(enable);
+    let result = EnableAutoHide(enable);
+    debug_log(&format!("EnableExplorerAutoHide({}) -> EnableAutoHide returned {}", enable, result));
+    if !enable {
+        EXPLORER_MODE.store(false, Ordering::SeqCst);
+    }
+    result
 }
 
 /// Enable or disable the in-process window-creation hook.

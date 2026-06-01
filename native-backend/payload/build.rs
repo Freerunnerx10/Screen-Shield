@@ -11,8 +11,8 @@ fn main() -> io::Result<()> {
             .set("CompanyName",      "Freerunnerx10")
             .set("LegalCopyright",   "Copyright \u{00a9} 2026 Freerunnerx10")
             .set("OriginalFilename", "ScreenShieldHook.dll")
-            .set("FileVersion",      "1.0.0.0")
-            .set("ProductVersion",   "1.0.0")
+            .set("FileVersion",      "1.1.1.0")
+            .set("ProductVersion",   "1.1.1")
             .compile()?;
     }
     Ok(())

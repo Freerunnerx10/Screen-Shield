@@ -223,6 +223,32 @@
   color: var(--text-muted);
 }
 
+/* ── System-controlled hidden state ──────────────────────── */
+.window-item.is-system-hidden {
+  background: var(--hidden-bg);
+  opacity: 0.7;
+}
+
+.system-badge {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  font-style: italic;
+  vertical-align: baseline;
+}
+
+.eye-btn.is-system-controlled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.eye-btn.is-system-controlled:hover {
+  background: none;
+  color: var(--text-muted);
+}
+
 /* ── Tray indicator — shown when a process has no open windows ── */
 .wl-tray-note {
   padding: 8px 12px 8px 55px;

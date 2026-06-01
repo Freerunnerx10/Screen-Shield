@@ -17,6 +17,10 @@ const api = window.screenShield ?? {
   startWatch: async () => {},
   stopWatch: async () => {},
   enableAutoHideAll: async () => {},
+  enableExplorerHook: async () => {},
+  addHiddenProcess: async () => {},
+  removeHiddenProcess: async () => {},
+  getHiddenProcesses: async () => [],
   getSystemTheme: async () => ({ isDark: false, accentColor: null }),
   onSystemThemeChange: () => {},
   getLogoSrc: async () => null,
@@ -97,11 +101,10 @@ export default function App() {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [hideDesktop, setHideDesktop] = useState(false)
   const [hideTaskbar, setHideTaskbar] = useState(false)
+  const [hideTaskView, setHideTaskView] = useState(false)
   // Ref mirror so the background poll (no deps) can read the current toggle state.
-  // Task View (MultitaskingViewFrame) is rendered within the DWM desktop compositor
-  // layer — when the desktop is hidden from capture, Task View is hidden as well.
-  // The ref lets the poll hide/unhide the transient overlay in sync with the desktop toggle.
   const hideDesktopRef = useRef(false)
+  const hideTaskViewRef = useRef(false)
 
   // Theme & settings panel
   const [theme, setTheme] = useState(() => localStorage.getItem('ss-theme') || 'default')
@@ -188,9 +191,19 @@ export default function App() {
       const toUnhide = []
 
       if (isFirstLoad) {
+        // Load persisted hidden processes and pre-populate lock sets so that
+        // processes hidden in a previous session are immediately re-locked,
+        // even if the backend hasn't finished re-injecting hooks yet.
+        try {
+          const persisted = await api.getHiddenProcesses?.() ?? []
+          for (const p of persisted) {
+            if (p.name) lockedNamesRef.current.add(p.name.toLowerCase())
+          }
+        } catch { /* non-fatal */ }
+
         // Session restore — rebuild lock sets from what the OS reports as hidden.
         // explorer.exe includes system UI like Progman (the desktop background host),
-        // the taskbar (Shell_TrayWnd), and the Alt+Tab overlay (MultitaskingViewFrame).
+        // the taskbar (Shell_TrayWnd), and the Alt+Tab overlay (XamlExplorerHostIslandWindow).
         // Lock only the specific HWND for explorer.exe windows — adding explorer.exe
         // to lockedPidsRef or lockedNamesRef would cause all File Explorer windows to
         // be auto-hidden on the next refresh or poll.
@@ -198,22 +211,27 @@ export default function App() {
         let taskbarWasHidden = false
         for (const w of list) {
           if (w.no_window || !w.hidden) continue
+          // Skip system-controlled hidden windows (e.g. Discord) — do not add
+          // them to lock sets or attempt to manage their visibility.
+          if (w.hidden_by === 'system') continue
           const isShell = w.process_name?.toLowerCase() === 'explorer.exe'
           if (!isShell && w.pid) lockedPidsRef.current.add(w.pid)
           if (!isShell && w.hwnd) lockedHwndsRef.current.add(w.hwnd)
           if (!isShell && w.process_name) lockedNamesRef.current.add(w.process_name.toLowerCase())
           if (isShell && w.title === 'Program Manager') desktopWasHidden = true
           if (isShell && (w.class_name === 'Shell_TrayWnd' || w.class_name === 'Shell_SecondaryTrayWnd')) taskbarWasHidden = true
-          // MultitaskingViewFrame (Task View) shares the desktop compositor layer —
+          // XamlExplorerHostIslandWindow (Task View) shares the desktop compositor layer —
           // if it was hidden, restore the combined desktop toggle.
-          if (isShell && w.class_name === 'MultitaskingViewFrame') desktopWasHidden = true
+          if (isShell && w.class_name === 'XamlExplorerHostIslandWindow') desktopWasHidden = true
         }
         if (desktopWasHidden) setHideDesktop(true)
         if (taskbarWasHidden) setHideTaskbar(true)
       } else {
         // Stale-hidden cleanup: unlock anything the OS has hidden that we didn't lock.
+        // Skip system-controlled windows — they are not stale, just externally managed.
         for (const w of list) {
           if (w.no_window || !w.hidden) continue
+          if (w.hidden_by === 'system') continue
           if (
             lockedPidsRef.current.has(w.pid) ||
             lockedHwndsRef.current.has(w.hwnd) ||
@@ -234,12 +252,22 @@ export default function App() {
         const updated = prev.map((p) => {
           const live = listMap.get(entryKey(p))
           if (!live) return null // Window closed — remove
-          return { ...live, hidden: p.hidden }
+          // Propagate hidden_by from live backend data (never fall back to
+          // stale prev value — that would make system-controlled sticky).
+          const hiddenBy = live.hidden_by ?? null
+          // When transitioning OUT of system control, revert to the live OS
+          // state so the window isn't stuck hidden with a locked toggle.
+          const hidden = hiddenBy === 'system' ? true
+            : (p.hidden_by === 'system') ? live.hidden
+            : p.hidden
+          return { ...live, hidden, hidden_by: hiddenBy }
         }).filter(Boolean)
 
         const appendNew = list
           .filter((w) => !prevKeys.has(entryKey(w)))
           .map((w) => {
+            // System-controlled hidden windows are always shown as hidden
+            if (w.hidden_by === 'system') return { ...w, hidden: true }
             const shouldHide =
               lockedPidsRef.current.has(w.pid) ||
               (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
@@ -302,9 +330,12 @@ export default function App() {
   // Keep themeRef in sync for use inside the stable system-theme change listener
   useEffect(() => { themeRef.current = theme }, [theme])
 
-  // Keep hideDesktopRef in sync so the background poll can read the toggle state
-  // for transient Task View / Alt-Tab overlay windows.
+  // Keep hideDesktopRef in sync so the background poll can read the toggle state.
   useEffect(() => { hideDesktopRef.current = hideDesktop }, [hideDesktop])
+
+  // Keep hideTaskViewRef in sync so the background poll can read the toggle state
+  // for transient Task View / Alt-Tab overlay windows (XamlExplorerHostIslandWindow).
+  useEffect(() => { hideTaskViewRef.current = hideTaskView }, [hideTaskView])
 
   // Apply theme — sets data-theme attribute (static themes) or inline CSS variables (system)
   useEffect(() => {
@@ -402,6 +433,8 @@ export default function App() {
            const knownKeys = new Set(windowsRef.current.map((w) => entryKey(w)))
            for (const w of list) {
              if (w.no_window || knownKeys.has(entryKey(w))) continue
+             // Never auto-hide system-controlled windows (e.g. Discord)
+             if (w.hidden_by === 'system') continue
              if (
                lockedPidsRef.current.has(w.pid) ||
                lockedHwndsRef.current.has(w.hwnd) ||
@@ -412,19 +445,32 @@ export default function App() {
              }
            }
  
-           // Task View / Alt-Tab overlay (MultitaskingViewFrame) is transient — it
-           // only exists while Alt-Tab / Win-Tab is held.  It shares the DWM desktop
-           // compositor layer, so its capture visibility is tied to the desktop toggle.
-           // The poll catches it on each appearance and hides/unhides it accordingly.
-           const toAutoUnhideAltTab = []
-           for (const w of list) {
-             if (w.class_name !== 'MultitaskingViewFrame') continue
-             if (hideDesktopRef.current && !w.hidden) {
-               toAutoHide.push(w.hwnd)
-             } else if (!hideDesktopRef.current && w.hidden) {
-               toAutoUnhideAltTab.push(w.hwnd)
-             }
-           }
+            // Program Manager (Progman) is the desktop background host,
+            // controlled by the desktop toggle.
+            const toAutoUnhideDesktop = []
+            for (const w of list) {
+              const isDesktopTarget =
+                w.process_name?.toLowerCase() === 'explorer.exe' && w.title === 'Program Manager'
+              if (!isDesktopTarget) continue
+              if (hideDesktopRef.current && !w.hidden) {
+                toAutoHide.push(w.hwnd)
+              } else if (!hideDesktopRef.current && w.hidden) {
+                toAutoUnhideDesktop.push(w.hwnd)
+              }
+            }
+
+            // XamlExplorerHostIslandWindow (Task View / Alt-Tab overlay) is transient.
+            // The in-process hook handles new windows instantly, but the poll
+            // syncs any that appear while polling and unhides when toggled off.
+            const toAutoUnhideTaskView = []
+            for (const w of list) {
+              if (w.class_name !== 'XamlExplorerHostIslandWindow') continue
+              if (hideTaskViewRef.current && !w.hidden) {
+                toAutoHide.push(w.hwnd)
+              } else if (!hideTaskViewRef.current && w.hidden) {
+                toAutoUnhideTaskView.push(w.hwnd)
+              }
+            }
  
            // Wrap the render update in startTransition so React can yield to
            // user interactions mid-render and avoid blocking the Windows message
@@ -444,13 +490,25 @@ export default function App() {
                    return null // Window closed — remove from list
                  }
                  if (live.title !== p.title) anyChange = true
-                 // Sync Task View / Alt-Tab overlay hidden state with the desktop
-                 // toggle ref — the transient window may have been hidden in a prior
-                 // cycle and must reflect the current toggle when it reappears.
-                 const isAltTab = p.class_name === 'MultitaskingViewFrame'
-                 const altTabHidden = isAltTab ? hideDesktopRef.current : p.hidden
-                 if (isAltTab && altTabHidden !== p.hidden) anyChange = true
-                 return { ...p, title: live.title, hidden: altTabHidden }
+                 // Propagate hidden_by from live backend data (never fall back
+                 // to stale prev value — that would make system-controlled sticky).
+                 const liveHiddenBy = live.hidden_by ?? null
+                 if (liveHiddenBy !== p.hidden_by) anyChange = true
+                 // Sync toggle-controlled windows with their respective refs
+                 // so they reflect the current toggle state on each poll.
+                 const isDesktopTarget =
+                   p.process_name?.toLowerCase() === 'explorer.exe' && p.title === 'Program Manager'
+                 const isTaskViewTarget = p.class_name === 'XamlExplorerHostIslandWindow'
+                 // When transitioning OUT of system control, revert to the live
+                 // OS state so the window isn't stuck hidden with a locked toggle.
+                 let syncHidden = (p.hidden_by === 'system' && liveHiddenBy !== 'system')
+                   ? live.hidden : p.hidden
+                 if (isDesktopTarget) syncHidden = hideDesktopRef.current
+                 else if (isTaskViewTarget) syncHidden = hideTaskViewRef.current
+                 // System-controlled windows always stay hidden and cannot be toggled
+                 if (liveHiddenBy === 'system') syncHidden = true
+                 if ((isDesktopTarget || isTaskViewTarget) && syncHidden !== p.hidden) anyChange = true
+                 return { ...p, title: live.title, hidden: syncHidden, hidden_by: liveHiddenBy }
                }).filter(Boolean)
  
                // Append genuinely new windows (not seen in prev)
@@ -462,14 +520,22 @@ export default function App() {
                return [
                  ...updated,
                  ...newWins.map((w) => {
+                   // System-controlled windows are always shown as hidden and read-only
+                   if (w.hidden_by === 'system') {
+                     return { ...w, hidden: true }
+                   }
                    const locked =
                      lockedPidsRef.current.has(w.pid) ||
                      (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
                      lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
                      (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-                   // Task View / Alt-Tab overlay: honour the desktop toggle via ref (transient window)
-                   const isAltTab = w.class_name === 'MultitaskingViewFrame'
-                   const shouldHide = !!locked || (isAltTab && hideDesktopRef.current)
+                   // Toggle-controlled windows: honour their respective toggle refs
+                   const isDesktopTarget =
+                     w.process_name?.toLowerCase() === 'explorer.exe' && w.title === 'Program Manager'
+                   const isTaskViewTarget = w.class_name === 'XamlExplorerHostIslandWindow'
+                   const shouldHide = !!locked ||
+                     (isDesktopTarget && hideDesktopRef.current) ||
+                     (isTaskViewTarget && hideTaskViewRef.current)
                    return { ...w, hidden: shouldHide }
                  }),
                ]
@@ -481,8 +547,12 @@ export default function App() {
            for (const hwnd of toAutoHide) {
              api.hideWindow(hwnd, false).catch(() => {})
            }
-           // Unhide Alt-Tab overlay windows when the toggle has been turned OFF.
-           for (const hwnd of toAutoUnhideAltTab) {
+           // Unhide desktop windows when the toggle has been turned OFF.
+           for (const hwnd of toAutoUnhideDesktop) {
+             api.unhideWindow(hwnd, false).catch(() => {})
+           }
+           // Unhide Task View windows when the toggle has been turned OFF.
+           for (const hwnd of toAutoUnhideTaskView) {
              api.unhideWindow(hwnd, false).catch(() => {})
            }
          } catch {
@@ -535,15 +605,23 @@ export default function App() {
 
       try {
         const shouldHide = !win.hidden
+        let result
         if (shouldHide) {
-          await api.hideWindow(win.hwnd, false)
+          result = await api.hideWindow(win.hwnd, false)
+        } else {
+          result = await api.unhideWindow(win.hwnd, false)
+        }
+        if (!result.success) {
+          setError(`Failed to ${shouldHide ? 'hide' : 'unhide'} window: ${result.error}`)
+          return
+        }
+        if (shouldHide) {
           lockedHwndsRef.current.add(win.hwnd)
           // Individual hide locks only this specific HWND — do NOT add to
           // lockedNamesRef or call updateWatcher.  Adding the process name here
           // caused every future window from the same process to be auto-hidden
           // even when the user only intended to hide one specific window.
         } else {
-          await api.unhideWindow(win.hwnd, false)
           lockedHwndsRef.current.delete(win.hwnd)
           // Stop watching this process name if no other windows from it are locked
           if (win.process_name) {
@@ -592,13 +670,18 @@ export default function App() {
           w.hidden !== hide,
       )
       try {
-        await Promise.all(
+        const results = await Promise.all(
           targets.map((w) =>
             hide
               ? api.hideWindow(w.hwnd, false)
               : api.unhideWindow(w.hwnd, false),
           ),
         )
+        const failed = results.find(r => !r.success)
+        if (failed) {
+          setError(`Failed to ${hide ? 'hide' : 'unhide'} process windows: ${failed.error}`)
+          return
+        }
         setWindows((prev) =>
           prev.map((w) =>
             !isProgMan(w) && !isTaskbarWin(w) && !isAltTabWin(w) &&
@@ -609,10 +692,17 @@ export default function App() {
 
         if (hide) {
           lockedPidsRef.current.add(pid)
-          if (processName) lockedNamesRef.current.add(processName)
+          if (processName) {
+            lockedNamesRef.current.add(processName)
+            // Persist the process name so hiding survives ScreenShield restarts
+            if (!isShellHost) api.addHiddenProcess?.(processName).catch(() => {})
+          }
         } else {
           lockedPidsRef.current.delete(pid)
-          if (processName) lockedNamesRef.current.delete(processName)
+          if (processName) {
+            lockedNamesRef.current.delete(processName)
+            if (!isShellHost) api.removeHiddenProcess?.(processName).catch(() => {})
+          }
           // Also remove any individually-locked HWNDs for this PID
           for (const w of windows.filter((win) => win.pid === pid)) {
             lockedHwndsRef.current.delete(w.hwnd)
@@ -639,29 +729,67 @@ export default function App() {
 
   // Alt+Tab overlay window; filtered from main list
   const isAltTabWin = (w) =>
-    w.class_name === 'MultitaskingViewFrame'
+    w.class_name === 'XamlExplorerHostIslandWindow'
 
   const toggleHideDesktop = useCallback(
     async (checked) => {
       setHideDesktop(checked)
-      // Target both the desktop background (Program Manager) and any currently-visible
-      // Task View / Alt-Tab overlay (MultitaskingViewFrame).  Task View is rendered
-      // within the DWM desktop compositor layer, so its capture visibility is
-      // inherently tied to the desktop surface.
-      const targets = windows.filter((w) => isProgMan(w) || isAltTabWin(w))
+      // Target Program Manager (desktop background).  SetWindowDisplayAffinity
+      // works on Program Manager when called via the injected DLL inside
+      // explorer.exe.
+      const targets = windows.filter((w) => isProgMan(w))
       try {
-        await Promise.all(
+        const results = await Promise.all(
           targets.map((w) =>
             checked
               ? api.hideWindow(w.hwnd, false)
               : api.unhideWindow(w.hwnd, false),
           ),
         )
+        const failed = results.find(r => !r.success)
+        if (failed) {
+          setError(`Failed to ${checked ? 'hide' : 'unhide'} desktop: ${failed.error}`)
+          return
+        }
         setWindows((prev) =>
-          prev.map((w) => (isProgMan(w) || isAltTabWin(w) ? { ...w, hidden: checked } : w)),
+          prev.map((w) => (isProgMan(w) ? { ...w, hidden: checked } : w)),
         )
         if (checked) targets.forEach((w) => lockedHwndsRef.current.add(w.hwnd))
         else targets.forEach((w) => lockedHwndsRef.current.delete(w.hwnd))
+      } catch (err) {
+        setError(err.message ?? String(err))
+      }
+    },
+    [windows],
+  )
+
+  const toggleHideTaskView = useCallback(
+    async (checked) => {
+      setHideTaskView(checked)
+      try {
+        // Enable or disable the class-filtered in-process hook inside
+        // explorer.exe that targets XamlExplorerHostIslandWindow (Task View /
+        // Alt-Tab overlay).  The hook fires synchronously on window creation
+        // so it catches the transient overlay before DWM composites a frame.
+        const result = await api.enableExplorerHook(checked)
+        if (result && !result.success) {
+          setError(`Failed to ${checked ? 'enable' : 'disable'} Task View hiding: ${result.error}`)
+          return
+        }
+        // Also hide/unhide any XamlExplorerHostIslandWindow windows that already exist
+        const targets = windows.filter((w) => isAltTabWin(w))
+        if (targets.length > 0) {
+          await Promise.all(
+            targets.map((w) =>
+              checked
+                ? api.hideWindow(w.hwnd, false)
+                : api.unhideWindow(w.hwnd, false),
+            ),
+          )
+        }
+        setWindows((prev) =>
+          prev.map((w) => (isAltTabWin(w) ? { ...w, hidden: checked } : w)),
+        )
       } catch (err) {
         setError(err.message ?? String(err))
       }
@@ -674,13 +802,18 @@ export default function App() {
       setHideTaskbar(checked)
       const targets = windows.filter(isTaskbarWin)
       try {
-        await Promise.all(
+        const results = await Promise.all(
           targets.map((w) =>
             checked
               ? api.hideWindow(w.hwnd, false)
               : api.unhideWindow(w.hwnd, false),
           ),
         )
+        const failed = results.find(r => !r.success)
+        if (failed) {
+          setError(`Failed to ${checked ? 'hide' : 'unhide'} taskbar: ${failed.error}`)
+          return
+        }
         setWindows((prev) =>
           prev.map((w) => (isTaskbarWin(w) ? { ...w, hidden: checked } : w)),
         )
@@ -783,7 +916,7 @@ export default function App() {
                     onChange={(e) => toggleHideDesktop(e.target.checked)}
                   />
                   <span className="advanced-option-label">
-                    Hide desktop background and Task View from screen capture
+                    Hide desktop background from screen capture
                   </span>
                 </label>
                 <label className="advanced-option">
@@ -796,6 +929,16 @@ export default function App() {
                     Hide taskbar from screen capture
                   </span>
                 </label>
+                <label className="advanced-option">
+                  <input
+                    type="checkbox"
+                    checked={hideTaskView}
+                    onChange={(e) => toggleHideTaskView(e.target.checked)}
+                  />
+                  <span className="advanced-option-label">
+                    Hide Task View and Alt+Tab from screen capture
+                  </span>
+                </label>
               </div>
             )}
           </div>
@@ -803,7 +946,7 @@ export default function App() {
       </div>
 
       {/* ── Footer: status bar ────────────────────────────────── */}
-      <StatusBar hiddenCount={hiddenCount} hideDesktop={hideDesktop} hideTaskbar={hideTaskbar} />
+      <StatusBar hiddenCount={hiddenCount} hideDesktop={hideDesktop} hideTaskbar={hideTaskbar} hideTaskView={hideTaskView} />
 
       {/* ── Settings overlay ──────────────────────────────────── */}
       {settingsOpen && (

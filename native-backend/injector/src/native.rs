@@ -1,7 +1,7 @@
 use dll_syringe::{
-    Syringe,
     process::{BorrowedProcessModule, OwnedProcess, Process},
     rpc::{RawRpcFunctionPtr, RemoteRawProcedure},
+    Syringe,
 };
 use std::collections::{HashMap, HashSet};
 use std::error;
@@ -9,27 +9,28 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use std::{env, path::PathBuf};
 use tracing::debug;
 use windows::{
+    core::{BOOL, PWSTR},
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT, TRUE, WPARAM},
         Graphics::{
-            Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+            Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
             Gdi::{
-                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
-                GetDIBits, GetObjectW, ReleaseDC,
+                DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO,
+                BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
             },
         },
         System::{
             Diagnostics::{
                 Etw::{
-                    CloseTrace, ControlTraceW, EnableTraceEx2,
-                    EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD,
-                    EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES,
-                    EVENT_TRACE_REAL_TIME_MODE, OpenTraceW, PROCESS_TRACE_MODE_EVENT_RECORD,
-                    PROCESS_TRACE_MODE_REAL_TIME, ProcessTrace, StartTraceW,
-                    WNODE_FLAG_TRACED_GUID, CONTROLTRACE_HANDLE,
+                    CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace,
+                    StartTraceW, CONTROLTRACE_HANDLE, EVENT_CONTROL_CODE_ENABLE_PROVIDER,
+                    EVENT_RECORD, EVENT_TRACE_CONTROL_STOP, EVENT_TRACE_LOGFILEW,
+                    EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE,
+                    PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_REAL_TIME,
+                    WNODE_FLAG_TRACED_GUID,
                 },
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
                     TH32CS_SNAPPROCESS,
                 },
             },
@@ -41,19 +42,19 @@ use windows::{
         UI::{
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DestroyIcon, EnumWindows, GCLP_HICON, GCLP_HICONSM, GetClassLongPtrW,
-                GetClassNameW, GetIconInfo, GetWindowDisplayAffinity, GetWindowRect,
-                GetWindowTextW, GetWindowThreadProcessId, HICON, ICON_BIG, ICON_SMALL2, ICONINFO,
-                IsWindowVisible, SendMessageW, WM_GETICON,
+                DestroyIcon, EnumWindows, GetClassLongPtrW, GetClassNameW, GetIconInfo,
+                GetWindowDisplayAffinity, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+                IsWindowVisible, SendMessageW, GCLP_HICON, GCLP_HICONSM, HICON, ICONINFO, ICON_BIG,
+                ICON_SMALL2, WM_GETICON,
             },
         },
     },
-    core::{BOOL, PWSTR},
 };
 
 /// Icon cache — maps PID to icon data URL to avoid repeated extraction on every poll.
 /// Icons are stable for the lifetime of a process, so caching them is safe.
-static ICON_CACHE: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static ICON_CACHE: LazyLock<Mutex<HashMap<u32, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, serde::Serialize)]
 pub struct WindowInfo {
@@ -73,12 +74,23 @@ pub struct WindowInfo {
     pub no_window: bool,
 }
 
+/// Returns true if the window has display affinity set to exclude from capture
+/// (WDA_EXCLUDEFROMCAPTURE flag is set).
+pub fn is_window_capture_protected(hwnd: u32) -> bool {
+    let hwnd = HWND(hwnd as *mut _);
+    let mut affinity: u32 = 0;
+    // GetWindowDisplayAffinity returns S_OK on success
+    match unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) } {
+        Ok(_) => affinity != 0, // Non-zero means WDA_EXCLUDEFROMCAPTURE is set
+        Err(_) => false,        // Failed to get affinity, assume not protected
+    }
+}
+
 /// Returns (full exe path, basename e.g. "chrome.exe") for the given PID.
 /// Returns empty strings if the process cannot be queried.
 pub fn get_process_info(pid: u32) -> (String, String) {
-    let handle: HANDLE = match unsafe {
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-    } {
+    let handle: HANDLE = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+    {
         Ok(h) => h,
         Err(_) => return (String::new(), String::new()),
     };
@@ -87,7 +99,12 @@ pub fn get_process_info(pid: u32) -> (String, String) {
     let mut len = buf.len() as u32;
 
     let result = unsafe {
-        QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len)
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
     };
 
     let _ = unsafe { CloseHandle(handle) };
@@ -131,11 +148,9 @@ fn build_parent_pid_map() -> HashMap<u32, u32> {
     map
 }
 
-
 /// Standard Base64 encoder — avoids pulling in a base64 crate.
 fn base64_encode(data: &[u8]) -> String {
-    const T: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -144,8 +159,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(T[((n >> 18) & 63) as usize] as char);
         out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -161,11 +184,13 @@ fn icon_b64_from_rgba(width: usize, height: usize, mut rgba: Vec<u8>) -> Option<
         }
     }
 
-    let img: image::RgbaImage =
-        image::ImageBuffer::from_raw(width as u32, height as u32, rgba)?;
+    let img: image::RgbaImage = image::ImageBuffer::from_raw(width as u32, height as u32, rgba)?;
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png).ok()?;
-    Some(format!("data:image/png;base64,{}", base64_encode(buf.get_ref())))
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64_encode(buf.get_ref())
+    ))
 }
 
 /// Returns a default icon as a data URL (white "S" on red background).
@@ -174,16 +199,14 @@ fn get_default_icon_data_url() -> String {
     // 16x16 PNG: white "S" on red background
     // This is a minimal valid PNG that represents the ScreenShield default icon
     const DEFAULT_ICON_PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
-        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00,
-        0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C, 0xE9, 0x00, 0x00,
-        0x00, 0x44, 0x45, 0x58, 0x54, 0x65, 0x78, 0x74, 0x00, 0x43, 0x72, 0x65,
-        0x61, 0x74, 0x65, 0x64, 0x20, 0x77, 0x69, 0x74, 0x68, 0x20, 0x47, 0x49,
-        0x4D, 0x50, 0x57, 0x81, 0x0E, 0x17, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44,
-        0x41, 0x54, 0x38, 0x4F, 0x63, 0x64, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00,
-        0x04, 0x00, 0x01, 0x39, 0x39, 0x6E, 0x9C, 0x00, 0x00, 0x00, 0x00, 0x49,
-        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42, 0x00, 0xAE, 0xCE, 0x1C,
+        0xE9, 0x00, 0x00, 0x00, 0x44, 0x45, 0x58, 0x54, 0x65, 0x78, 0x74, 0x00, 0x43, 0x72, 0x65,
+        0x61, 0x74, 0x65, 0x64, 0x20, 0x77, 0x69, 0x74, 0x68, 0x20, 0x47, 0x49, 0x4D, 0x50, 0x57,
+        0x81, 0x0E, 0x17, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x38, 0x4F, 0x63, 0x64,
+        0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x39, 0x39, 0x6E, 0x9C, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
     format!("data:image/png;base64,{}", base64_encode(DEFAULT_ICON_PNG))
 }
@@ -198,9 +221,9 @@ pub fn get_icon(hwnd: u32) -> Option<(usize, usize, Vec<u8>)> {
     //   3. GetClassLongPtrW GCLP_HICON  — 32x32 registered class icon
     //   4. GetClassLongPtrW GCLP_HICONSM — small registered class icon
     let candidates: [isize; 4] = [
-        unsafe { SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_BIG as usize)),    None) }.0,
+        unsafe { SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_BIG as usize)), None) }.0,
         unsafe { SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), None) }.0,
-        unsafe { GetClassLongPtrW(hwnd, GCLP_HICON) }  as isize,
+        unsafe { GetClassLongPtrW(hwnd, GCLP_HICON) } as isize,
         unsafe { GetClassLongPtrW(hwnd, GCLP_HICONSM) } as isize,
     ];
     let hicon_val = candidates.iter().copied().find(|&v| v != 0)?;
@@ -399,26 +422,25 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     } else {
         String::new()
     };
-     const EXCLUDED_CLASSES: &[&str] = &[
-         "NotifyIconOverflowWindow",
-         "WorkerW",
-         "MS_WebCheckMonitor",
-         "Progman",
-         "Shell_TrayWnd",
-     ];
+    const EXCLUDED_CLASSES: &[&str] = &[
+        "NotifyIconOverflowWindow",
+        "WorkerW",
+        "MS_WebCheckMonitor",
+    ];
     if EXCLUDED_CLASSES.contains(&class_name.as_str()) {
         return TRUE;
     }
 
     // System UI windows that are always present but have empty window titles.
     // Assign a synthetic title so they pass the title filter below.
-    // Shell_TrayWnd            = primary taskbar
-    // Shell_SecondaryTrayWnd   = per-monitor taskbar on secondary displays
-    // MultitaskingViewFrame    = Alt+Tab / Task View overlay (hosted by explorer.exe)
+    // Shell_TrayWnd                    = primary taskbar
+    // Shell_SecondaryTrayWnd           = per-monitor taskbar on secondary displays
+    // XamlExplorerHostIslandWindow     = Alt+Tab / Task View overlay (Win 11, hosted by explorer.exe)
     const SYSTEM_UI_CLASSES: &[(&str, &str)] = &[
         ("Shell_TrayWnd", "Taskbar"),
         ("Shell_SecondaryTrayWnd", "Taskbar"),
-        ("MultitaskingViewFrame", "Alt+Tab Switcher"),
+        ("XamlExplorerHostIslandWindow", "Alt+Tab Switcher"),
+        ("Progman", "Program Manager"),
     ];
     let synthetic_title = SYSTEM_UI_CLASSES
         .iter()
@@ -519,7 +541,9 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
         win.process_name = info.1.clone();
         let proc_lower = win.process_name.to_lowercase();
         if SKIP_ICON_PROCS.contains(&proc_lower.as_str()) {
-            pid_exe_for_icon.entry(win.pid).or_insert_with(|| win.exe_path.clone());
+            pid_exe_for_icon
+                .entry(win.pid)
+                .or_insert_with(|| win.exe_path.clone());
         } else {
             pid_first_hwnd.entry(win.pid).or_insert(win.hwnd);
         }
@@ -533,53 +557,72 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
                 win.icon_data_url = icon_url;
             }
         }
-        
+
         // Get original icon from executable (stable app icon)
-        let original_icon_url = if SKIP_ICON_PROCS.contains(&win.process_name.to_lowercase().as_str()) {
-            // For explorer.exe, get icon from exe file
-            if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
-                icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+        let original_icon_url =
+            if SKIP_ICON_PROCS.contains(&win.process_name.to_lowercase().as_str()) {
+                // For explorer.exe, get icon from exe file
+                if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
+                    icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+                        // Fallback to default icon
+                        tracing::warn!(
+                            "Failed to get icon for {}, using fallback",
+                            win.process_name
+                        );
+                        get_default_icon_data_url()
+                    })
+                } else {
                     // Fallback to default icon
-                    tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                    tracing::warn!(
+                        "Failed to get icon for {}, using fallback",
+                        win.process_name
+                    );
                     get_default_icon_data_url()
-                })
+                }
             } else {
-                // Fallback to default icon
-                tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
-                get_default_icon_data_url()
-            }
-        } else {
-            // For other apps, try to get icon from window first, then fallback to exe
-            if let Some((width, height, pixels)) = get_icon(win.hwnd) {
-                if let Some(icon_url) = icon_b64_from_rgba(width, height, pixels) {
-                    icon_url
+                // For other apps, try to get icon from window first, then fallback to exe
+                if let Some((width, height, pixels)) = get_icon(win.hwnd) {
+                    if let Some(icon_url) = icon_b64_from_rgba(width, height, pixels) {
+                        icon_url
+                    } else {
+                        // Fallback to exe icon
+                        if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
+                            icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
+                                tracing::warn!(
+                                    "Failed to get icon for {}, using fallback",
+                                    win.process_name
+                                );
+                                get_default_icon_data_url()
+                            })
+                        } else {
+                            tracing::warn!(
+                                "Failed to get icon for {}, using fallback",
+                                win.process_name
+                            );
+                            get_default_icon_data_url()
+                        }
+                    }
                 } else {
                     // Fallback to exe icon
                     if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
                         icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
-                            tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                            tracing::warn!(
+                                "Failed to get icon for {}, using fallback",
+                                win.process_name
+                            );
                             get_default_icon_data_url()
                         })
                     } else {
-                        tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
+                        tracing::warn!(
+                            "Failed to get icon for {}, using fallback",
+                            win.process_name
+                        );
                         get_default_icon_data_url()
                     }
                 }
-            } else {
-                // Fallback to exe icon
-                if let Some((width, height, pixels)) = get_icon_from_exe(&win.exe_path) {
-                    icon_b64_from_rgba(width, height, pixels).unwrap_or_else(|| {
-                        tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
-                        get_default_icon_data_url()
-                    })
-                } else {
-                    tracing::warn!("Failed to get icon for {}, using fallback", win.process_name);
-                    get_default_icon_data_url()
-                }
-            }
-        };
+            };
         win.original_icon_data_url = original_icon_url;
-        
+
         // If we haven't set a current icon yet, use the original
         if win.icon_data_url.is_empty() {
             win.icon_data_url = win.original_icon_data_url.clone();
@@ -593,9 +636,8 @@ pub fn get_top_level_windows() -> Vec<WindowInfo> {
     }
 
     // Remove system host processes that must not appear in the window list.
-    top_level_windows.retain(|win| {
-        !SYSTEM_EXCLUSIONS.contains(&win.process_name.to_lowercase().as_str())
-    });
+    top_level_windows
+        .retain(|win| !SYSTEM_EXCLUSIONS.contains(&win.process_name.to_lowercase().as_str()));
 
     // Fetch one icon per unique PID using the first window handle seen.
     // Use global cache to avoid repeated extraction on every poll.
@@ -709,7 +751,8 @@ pub fn get_processes_by_name(names: &[&str], exclude_pids: &HashSet<u32>) -> Vec
                             original_icon_data_url: {
                                 // Extract the stable app icon from the executable file
                                 // so the UI can display it even when the app is minimized to tray.
-                                if let Some((width, height, pixels)) = get_icon_from_exe(&exe_path) {
+                                if let Some((width, height, pixels)) = get_icon_from_exe(&exe_path)
+                                {
                                     icon_b64_from_rgba(width, height, pixels).unwrap_or_default()
                                 } else {
                                     String::new()
@@ -788,10 +831,18 @@ impl Injector {
         )?;
 
         for hwnd in hwnds {
-            remote_proc.call(*hwnd, hide).unwrap();
+            let result: bool = remote_proc.call(*hwnd, hide).unwrap();
+            eprintln!(
+                "[Injector] SetWindowVisibility hwnd={} hide={} result={}",
+                *hwnd, hide, result
+            );
 
             if let Some(hide_from_taskbar) = hide_from_taskbar {
-                remote_proc2.call(*hwnd, hide_from_taskbar).unwrap();
+                let result2: bool = remote_proc2.call(*hwnd, hide_from_taskbar).unwrap();
+                eprintln!(
+                    "[Injector] HideFromTaskbar hwnd={} hide={} result={}",
+                    *hwnd, hide_from_taskbar, result2
+                );
             }
         }
 
@@ -801,19 +852,15 @@ impl Injector {
         // Best-effort: silently skip if the export isn't present (older DLL build).
         //
         // SKIP for explorer.exe — it hosts system UI (desktop, taskbar, Alt-Tab
-        // overlay) alongside File Explorer windows.  Enabling the auto-hide hook
-        // on explorer.exe would cause every future explorer.exe window (including
-        // new File Explorer windows) to be persistently hidden from capture.
-        // System UI HWNDs are targeted individually via SetWindowDisplayAffinity.
+        // overlay) alongside File Explorer windows.  The explorer-mode hook is
+        // controlled separately via the enable-explorer-hook command.
         let is_explorer = proc_name.eq_ignore_ascii_case("explorer.exe");
         if !is_explorer {
-            if let Ok(remote_enable) =
-                Self::get_remote_proc::<extern "system" fn(bool) -> bool>(
-                    &syringe,
-                    module,
-                    "EnableAutoHide",
-                )
-            {
+            if let Ok(remote_enable) = Self::get_remote_proc::<extern "system" fn(bool) -> bool>(
+                &syringe,
+                module,
+                "EnableAutoHide",
+            ) {
                 let _ = remote_enable.call(hide);
             }
         }
@@ -868,8 +915,7 @@ impl Injector {
                             .iter()
                             .position(|&c| c == 0)
                             .unwrap_or(entry.szExeFile.len());
-                        let exe =
-                            String::from_utf16_lossy(&entry.szExeFile[..nul]).to_lowercase();
+                        let exe = String::from_utf16_lossy(&entry.szExeFile[..nul]).to_lowercase();
                         if exe == name_lower {
                             pids.push(this_pid);
                         }
@@ -895,17 +941,119 @@ impl Injector {
             let Ok(module) = syringe.find_or_inject(&dll_path) else {
                 continue;
             };
-            let Ok(remote_enable) =
-                Self::get_remote_proc::<extern "system" fn(bool) -> bool>(
-                    &syringe,
-                    module,
-                    "EnableAutoHide",
-                )
-            else {
+            let Ok(remote_enable) = Self::get_remote_proc::<extern "system" fn(bool) -> bool>(
+                &syringe,
+                module,
+                "EnableAutoHide",
+            ) else {
                 continue;
             };
             let _ = remote_enable.call(enable);
         }
+    }
+
+    /// Inject into explorer.exe and call `EnableExplorerAutoHide(enable)`.
+    ///
+    /// This activates the class-filtered in-process hook that only targets
+    /// `XamlExplorerHostIslandWindow` (Task View / Alt-Tab overlay), leaving
+    /// all other explorer.exe windows untouched.  Best-effort: errors are
+    /// returned but individual process failures in multi-instance scenarios
+    /// are skipped.
+    pub fn enable_explorer_hook(enable: bool) -> Result<(), Box<dyn error::Error>> {
+        // File-based logging — eprintln goes nowhere when running as a child
+        // process with stdin piped from Electron.
+        fn log(msg: &str) {
+            use std::io::Write;
+            eprintln!("{}", msg);
+            if let Ok(tmp) = std::env::var("TEMP") {
+                let path = std::path::Path::new(&tmp).join("screenshield-injector.log");
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    let _ = writeln!(f, "{}", msg);
+                }
+            }
+        }
+
+        log(&format!("[Injector] enable_explorer_hook({}) called", enable));
+        let self_pid = std::process::id();
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }?;
+        let mut pids: Vec<u32> = Vec::new();
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        unsafe {
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let this_pid = entry.th32ProcessID;
+                    if this_pid != self_pid {
+                        let nul = entry
+                            .szExeFile
+                            .iter()
+                            .position(|&c| c == 0)
+                            .unwrap_or(entry.szExeFile.len());
+                        let exe = String::from_utf16_lossy(&entry.szExeFile[..nul]).to_lowercase();
+                        if exe == "explorer.exe" {
+                            pids.push(this_pid);
+                        }
+                    }
+                    entry = std::mem::zeroed();
+                    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+
+        if pids.is_empty() {
+            log("[Injector] explorer.exe not found");
+            return Err("explorer.exe not found".into());
+        }
+
+        log(&format!("[Injector] Found explorer.exe PIDs: {:?}", pids));
+
+        for pid in pids {
+            let Ok(proc) = OwnedProcess::from_pid(pid) else {
+                log(&format!("[Injector] OwnedProcess::from_pid({}) failed", pid));
+                continue;
+            };
+            let Ok(dll_path) = Self::get_dll_path(&proc) else {
+                log(&format!("[Injector] get_dll_path failed for pid={}", pid));
+                continue;
+            };
+            log(&format!("[Injector] Injecting {:?} into pid={}", dll_path, pid));
+            let syringe = Syringe::for_process(proc);
+            let Ok(module) = syringe.find_or_inject(&dll_path) else {
+                log(&format!("[Injector] find_or_inject failed for pid={}", pid));
+                continue;
+            };
+            let Ok(remote_enable) = Self::get_remote_proc::<extern "system" fn(bool) -> bool>(
+                &syringe,
+                module,
+                "EnableExplorerAutoHide",
+            ) else {
+                log("[Injector] EnableExplorerAutoHide export not found in DLL");
+                continue;
+            };
+            log(&format!("[Injector] Calling EnableExplorerAutoHide({}) in pid={}", enable, pid));
+            let result: bool = remote_enable.call(enable).unwrap_or(false);
+            log(&format!(
+                "[Injector] EnableExplorerAutoHide({}) pid={} returned={}",
+                enable, pid, result
+            ));
+            if !result {
+                return Err(format!(
+                    "EnableExplorerAutoHide({}) failed for explorer.exe pid={}",
+                    enable, pid
+                ).into());
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -933,10 +1081,16 @@ const KERNEL_PROCESS_GUID: windows::core::GUID = windows::core::GUID {
 /// Called from the ETW callback thread — spawns a worker so the callback
 /// returns quickly.
 fn inject_pid_enable_auto_hide(pid: u32) {
-    let Ok(proc) = OwnedProcess::from_pid(pid) else { return };
-    let Ok(dll_path) = Injector::get_dll_path(&proc) else { return };
+    let Ok(proc) = OwnedProcess::from_pid(pid) else {
+        return;
+    };
+    let Ok(dll_path) = Injector::get_dll_path(&proc) else {
+        return;
+    };
     let syringe = Syringe::for_process(proc);
-    let Ok(module) = syringe.find_or_inject(&dll_path) else { return };
+    let Ok(module) = syringe.find_or_inject(&dll_path) else {
+        return;
+    };
     let Ok(remote_enable) = Injector::get_remote_proc::<extern "system" fn(bool) -> bool>(
         &syringe,
         module,
@@ -968,17 +1122,13 @@ unsafe extern "system" fn etw_event_callback(record: *mut EVENT_RECORD) {
         return;
     }
 
-    let user_data = unsafe {
-        std::slice::from_raw_parts(record.UserData as *const u8, data_len)
-    };
+    let user_data = unsafe { std::slice::from_raw_parts(record.UserData as *const u8, data_len) };
 
     // UserData layout for ProcessStart:
     //   offset 0..4  : ProcessID       (UINT32, new process)
     //   offset 4..8  : ParentProcessID (UINT32)
     //   offset 8..   : ImageName       (null-terminated UTF-16LE)
-    let new_pid = u32::from_le_bytes([
-        user_data[0], user_data[1], user_data[2], user_data[3],
-    ]);
+    let new_pid = u32::from_le_bytes([user_data[0], user_data[1], user_data[2], user_data[3]]);
 
     // Derive file name — prefer parsing UserData to avoid an extra OpenProcess.
     let file_name: String = if data_len > 8 {
@@ -1017,14 +1167,12 @@ unsafe extern "system" fn etw_event_callback(record: *mut EVENT_RECORD) {
 
 /// Stop a named ETW trace session (best-effort; used for startup cleanup and shutdown).
 unsafe fn stop_etw_session(session_name_wide: &[u16]) {
-    let props_size = std::mem::size_of::<EVENT_TRACE_PROPERTIES>()
-        + session_name_wide.len() * 2;
+    let props_size = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() + session_name_wide.len() * 2;
     let mut buf: Vec<u8> = vec![0u8; props_size];
     let props = buf.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES;
     unsafe {
         (*props).Wnode.BufferSize = props_size as u32;
-        (*props).LoggerNameOffset =
-            std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
+        (*props).LoggerNameOffset = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
         // Pass the session name; ControlTraceW finds the session by name when
         // the handle is the default (zero).
         let _ = ControlTraceW(
@@ -1052,23 +1200,24 @@ pub fn start_etw_process_watcher(names: Vec<String>) {
 
     std::thread::spawn(|| unsafe {
         const SESSION: &str = "ScreenShieldProcWatcher";
-        let session_name_wide: Vec<u16> =
-            SESSION.encode_utf16().chain(std::iter::once(0u16)).collect();
+        let session_name_wide: Vec<u16> = SESSION
+            .encode_utf16()
+            .chain(std::iter::once(0u16))
+            .collect();
 
         // Clean up any session left by a previous unclean exit.
         stop_etw_session(&session_name_wide);
 
         // Allocate EVENT_TRACE_PROPERTIES followed immediately by the session
         // name in the same heap buffer.
-        let props_size = std::mem::size_of::<EVENT_TRACE_PROPERTIES>()
-            + session_name_wide.len() * 2;
+        let props_size =
+            std::mem::size_of::<EVENT_TRACE_PROPERTIES>() + session_name_wide.len() * 2;
         let mut buf: Vec<u8> = vec![0u8; props_size];
         let props = buf.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES;
         (*props).Wnode.BufferSize = props_size as u32;
         (*props).Wnode.Flags = WNODE_FLAG_TRACED_GUID;
         (*props).LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
-        (*props).LoggerNameOffset =
-            std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
+        (*props).LoggerNameOffset = std::mem::size_of::<EVENT_TRACE_PROPERTIES>() as u32;
 
         let mut session_handle = CONTROLTRACE_HANDLE::default();
         if StartTraceW(
@@ -1099,8 +1248,7 @@ pub fn start_etw_process_watcher(names: Vec<String>) {
         }
 
         let mut logfile = EVENT_TRACE_LOGFILEW::default();
-        logfile.LoggerName =
-            windows::core::PWSTR(session_name_wide.as_ptr() as *mut u16);
+        logfile.LoggerName = windows::core::PWSTR(session_name_wide.as_ptr() as *mut u16);
         logfile.Anonymous1.ProcessTraceMode =
             PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
         logfile.Anonymous2.EventRecordCallback = Some(etw_event_callback);

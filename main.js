@@ -58,6 +58,69 @@ function resetAppSettings() {
 }
 
 // ---------------------------------------------------------------------------
+// Hidden processes persistence
+// ---------------------------------------------------------------------------
+function getHiddenProcessesPath() {
+  return path.join(app.getPath('userData'), 'ss-hidden-processes.json')
+}
+
+function loadHiddenProcesses() {
+  try {
+    const data = fs.readFileSync(getHiddenProcessesPath(), 'utf8')
+    const parsed = JSON.parse(data)
+    // Ensure it's an array
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    // File doesn't exist or invalid JSON - return empty array
+    return []
+  }
+}
+
+function saveHiddenProcesses() {
+  try {
+    fs.writeFileSync(getHiddenProcessesPath(), JSON.stringify(hiddenProcesses, null, 2), 'utf8')
+  } catch {
+    // Ignore write errors - non-fatal
+  }
+}
+
+function addHiddenProcess(name) {
+  // Don't add duplicates
+  if (!hiddenProcesses.some(p => p.name === name)) {
+    hiddenProcesses.push({ name })
+    saveHiddenProcesses()
+  }
+}
+
+function removeHiddenProcess(name) {
+  hiddenProcesses = hiddenProcesses.filter(p => p.name !== name)
+  saveHiddenProcesses()
+}
+
+// Return a copy of the hidden processes array
+function getHiddenProcesses() {
+  return [...hiddenProcesses]
+}
+
+// Re-apply hidden state to currently running processes and start watching for new ones
+function reApplyHiddenStateToRunningProcesses() {
+  if (!client) return;
+  
+  const processNames = hiddenProcesses.map(p => p.name);
+  if (processNames.length === 0) return;
+  
+  // Enable auto-hide for all currently running processes that match the hidden names
+  client.send('enable-all', { enable: true, names: processNames }).catch((error) => {
+    console.error('[Screen Shield] Failed to enable auto-hide for running processes:', error);
+  });
+  
+  // Start watching for new processes with these names
+  client.send('watch', { names: processNames }).catch((error) => {
+    console.error('[Screen Shield] Failed to start watching for processes:', error);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Reduce Chromium / V8 memory footprint — Screen Shield is a lightweight
 // utility and does not need the full Chromium feature set.
 // ---------------------------------------------------------------------------
@@ -445,6 +508,10 @@ class ScreenShieldHelperClient {
 
     this.proc.stderr.on('data', () => { /* ignore */ })
 
+    // Swallow EPIPE / write errors on stdin so they don't become uncaught
+    // exceptions (e.g. when the backend exits before we finish writing).
+    this.proc.stdin.on('error', () => {})
+
     this.proc.on('close', () => {
       this.proc = null
       // Reject all in-flight requests
@@ -466,7 +533,7 @@ class ScreenShieldHelperClient {
 
   send(cmd, params) {
     return new Promise((resolve, reject) => {
-      if (!this.proc) {
+      if (!this.proc || this._stopping) {
         reject(new Error('backend not running'))
         return
       }
@@ -509,6 +576,8 @@ let client = null
 let watchedNames = []
 // Track HWNDs of windows that have been hidden by the app
 let hiddenWindows = []
+// Track process names that should be hidden (persisted across sessions)
+let hiddenProcesses = []
 
 // ---------------------------------------------------------------------------
 // CLI pass-through: electron . -- --hide <pid>  /  --unhide <pid>
@@ -548,19 +617,25 @@ let hiddenWindows = []
       const splashReady = createSplashWindow()
       await splashReady
 
-      // ── 2. Heavy initialisation (runs while splash is visible) ─────────
-      // Apply Defender exclusions for the running paths before starting
-      // the backend — gives the exclusion a moment to take effect so
-      // Defender does not quarantine the helper on its first spawn.
-      await addDefenderExclusions()
+       // ── 2. Heavy initialisation (runs while splash is visible) ─────────
+       // Apply Defender exclusions for the running paths before starting
+       // the backend — gives the exclusion a moment to take effect so
+       // Defender does not quarantine the helper on its first spawn.
+       await addDefenderExclusions()
+       
+// Load persisted hidden processes
+        hiddenProcesses = loadHiddenProcesses()
 
-       // Start the persistent backend client before the main window loads so
-       // IPC handlers are ready as soon as the renderer sends its first request.
-       const backendPath = isDev
-         ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldBackgroundService.exe')
-         : path.join(process.resourcesPath, 'ScreenShieldBackgroundService.exe')
-       client = new ScreenShieldHelperClient(backendPath)
-       client.start()
+        // Start the persistent backend client before the main window loads so
+        // IPC handlers are ready as soon as the renderer sends its first request.
+        const backendPath = isDev
+          ? path.join(__dirname, 'native-backend', 'target', 'release', 'ScreenShieldBackgroundService.exe')
+          : path.join(process.resourcesPath, 'ScreenShieldBackgroundService.exe')
+client = new ScreenShieldHelperClient(backendPath)
+         client.start()
+
+         // Re-apply hidden state to processes that are already running
+         reApplyHiddenStateToRunningProcesses()
 
       // ── 3. Create the main window (hidden until splash closes) ─────────
       createMainWindow()
@@ -982,37 +1057,73 @@ ipcMain.handle('is-elevated', () => isElevated())
 
 /** Returns list of visible top-level windows with icons from the Rust backend */
 ipcMain.handle('get-windows', async () => {
-  if (!client) return []
+   if (!client) return []
+   try {
+     const data = await client.send('list', {
+       proc_names: watchedNames.length > 0 ? watchedNames : undefined,
+     })
+     if (!Array.isArray(data)) return []
+
+     // Annotate each window with hidden_by so the frontend can distinguish
+     // ScreenShield-managed hiding from system-controlled hiding (e.g. Discord).
+     for (const w of data) {
+       if (!w.hidden) {
+         w.hidden_by = null
+       } else {
+         const procLower = (w.process_name || '').toLowerCase()
+         const ownedByHwnd = hiddenWindows.includes(w.hwnd)
+         const ownedByProcess = hiddenProcesses.some(p => p.name && p.name.toLowerCase() === procLower)
+         w.hidden_by = (ownedByHwnd || ownedByProcess) ? 'screenShield' : 'system'
+       }
+     }
+
+     return data
+   } catch {
+     return []
+   }
+})
+
+/** Check if a window is protected from screen capture (e.g., Discord's feature) */
+ipcMain.handle('is-window-protected', async (_event, hwnd) => {
+  if (!client) return false
   try {
-    const data = await client.send('list', {
-      proc_names: watchedNames.length > 0 ? watchedNames : undefined,
-    })
-    return Array.isArray(data) ? data : []
+    const result = await client.send('is-window-protected', { hwnd })
+    return !!result
   } catch {
-    return []
+    return false
   }
 })
 
 /** Hide a window by hwnd */
 ipcMain.handle('hide-window', async (_event, hwnd, altTab) => {
-  if (!client) return
-  
-  // Track the window as hidden
-  if (!hiddenWindows.includes(hwnd)) {
-    hiddenWindows.push(hwnd)
+  if (!client) return { success: false, error: 'Backend not running' }
+
+  try {
+    // Track the window as hidden
+    if (!hiddenWindows.includes(hwnd)) {
+      hiddenWindows.push(hwnd)
+    }
+
+    await client.send('hide', { hwnds: [hwnd], alt_tab: !!altTab })
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
   }
-  
-  return client.send('hide', { hwnds: [hwnd], alt_tab: !!altTab })
 })
 
 /** Unhide a window by hwnd */
 ipcMain.handle('unhide-window', async (_event, hwnd, altTab) => {
-  if (!client) return
-  
-  // Remove from tracking when unhidden
-  hiddenWindows = hiddenWindows.filter(h => h !== hwnd)
-  
-  return client.send('unhide', { hwnds: [hwnd], alt_tab: !!altTab })
+  if (!client) return { success: false, error: 'Backend not running' }
+
+  try {
+    // Remove from tracking when unhidden
+    hiddenWindows = hiddenWindows.filter(h => h !== hwnd)
+
+    await client.send('unhide', { hwnds: [hwnd], alt_tab: !!altTab })
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
 })
 
 /** List available display sources for the screen preview */
@@ -1075,6 +1186,40 @@ ipcMain.handle('start-watch', async (_event, names) => {
   // WinEvent watcher — both are handled inside the persistent serve process.
   client.send('enable-all', { enable: true, names }).catch(() => {})
   return client.send('watch', { names })
+})
+
+/** Enable or disable the class-filtered explorer.exe hook for Task View / Alt-Tab */
+ipcMain.handle('enable-explorer-hook', async (_event, enable) => {
+  if (!client) return { success: false, error: 'Backend not running' }
+  try {
+    await client.send('enable-explorer-hook', { enable: !!enable })
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+})
+
+/** Add a process name to the hidden processes list */
+ipcMain.handle('add-hidden-process', (_event, name) => {
+  if (typeof name === 'string' && name.trim() !== '') {
+    addHiddenProcess(name.trim())
+    return { success: true }
+  }
+  return { success: false, error: 'Invalid process name' }
+})
+
+/** Remove a process name from the hidden processes list */
+ipcMain.handle('remove-hidden-process', (_event, name) => {
+  if (typeof name === 'string' && name.trim() !== '') {
+    removeHiddenProcess(name.trim())
+    return { success: true }
+  }
+  return { success: false, error: 'Invalid process name' }
+})
+
+/** Get the list of hidden process names */
+ipcMain.handle('get-hidden-processes', () => {
+  return getHiddenProcesses()
 })
 
 /**
@@ -1174,23 +1319,24 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', () => {
-  // Restore all hidden windows before quitting
+  // Restore all windows hidden by ScreenShield before quitting.
+  // Do NOT touch system-controlled hidden windows (e.g. Discord).
+  // send() is async but before-quit is synchronous — the stdin.write()
+  // call is synchronous and will buffer; we just need to catch the
+  // returned promise so any EPIPE rejections don't go unhandled.
   if (client && hiddenWindows.length > 0) {
-    // Make a copy of the array to avoid issues if it changes during iteration
     const windowsToRestore = [...hiddenWindows]
-    
-    try {
-      // Unhide all tracked windows
-      client.send('unhide', { hwnds: windowsToRestore, alt_tab: false })
-      
-      // Clear the tracking array
-      hiddenWindows = []
-    } catch (error) {
-      // Log error but continue with app exit
-      console.error('[Screen Shield] Error restoring hidden windows on quit:', error)
-    }
+    client.send('unhide', { hwnds: windowsToRestore, alt_tab: false }).catch(() => {})
+    hiddenWindows = []
   }
-  
+
+  // Remove in-process auto-hide hooks from all processes that were hidden by
+  // ScreenShield so they don't remain hidden after ScreenShield exits.
+  if (client && hiddenProcesses.length > 0) {
+    const processNames = hiddenProcesses.map(p => p.name)
+    client.send('enable-all', { enable: false, names: processNames }).catch(() => {})
+  }
+
   if (client) {
     client.stop()
     client = null

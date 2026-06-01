@@ -5,17 +5,19 @@ import './StatusBar.css'
  *
  * Props:
  *   hiddenCount       number   — total hidden app windows
- *   hideDesktop       boolean  — whether the desktop background + Task View is hidden
+ *   hideDesktop       boolean  — whether the desktop background is hidden
  *   hideTaskbar       boolean  — whether the taskbar is hidden
+ *   hideTaskView      boolean  — whether Task View / Alt+Tab is hidden
  */
-export default function StatusBar({ hiddenCount, hideDesktop, hideTaskbar }) {
-  const systemHidden = hideDesktop || hideTaskbar
+export default function StatusBar({ hiddenCount, hideDesktop, hideTaskbar, hideTaskView }) {
+  const systemHidden = hideDesktop || hideTaskbar || hideTaskView
   const active = hiddenCount > 0 || systemHidden
 
   // Build a compact label for the advanced-settings flags that are active.
   const badges = []
   if (hideDesktop) badges.push('DESKTOP')
   if (hideTaskbar) badges.push('TASKBAR')
+  if (hideTaskView) badges.push('TASK VIEW')
 
   const countLabel =
     hiddenCount > 0

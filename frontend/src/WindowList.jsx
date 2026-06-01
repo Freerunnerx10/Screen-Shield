@@ -111,15 +111,18 @@ function AppIcon({ dataUrl, originalDataUrl, letter, processName }) {
 // ── WindowItem ────────────────────────────────────────────────────────────
 
 function WindowItem({ win, onToggle }) {
+  const isSystemHidden = win.hidden_by === 'system'
   return (
-    <div className={`window-item${win.hidden ? ' is-hidden' : ''}`}>
+    <div className={`window-item${win.hidden ? ' is-hidden' : ''}${isSystemHidden ? ' is-system-hidden' : ''}`}>
       <span className="window-item-title" title={win.title}>
         {win.title}
+        {isSystemHidden && <span className="system-badge">System controlled</span>}
       </span>
       <button
-        className={`eye-btn${win.hidden ? ' is-hidden' : ''}`}
-        onClick={() => onToggle(win)}
-        title={win.hidden ? 'Show — restore to screen capture' : 'Hide from screen capture'}
+        className={`eye-btn${win.hidden ? ' is-hidden' : ''}${isSystemHidden ? ' is-system-controlled' : ''}`}
+        onClick={isSystemHidden ? undefined : () => onToggle(win)}
+        disabled={isSystemHidden}
+        title={isSystemHidden ? 'Hidden (system controlled)' : win.hidden ? 'Show \u2014 restore to screen capture' : 'Hide from screen capture'}
       >
         {win.hidden ? <EyeSlashIcon /> : <EyeIcon />}
       </button>
@@ -135,8 +138,11 @@ function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
   // should show the open eye even if a no_window placeholder is still hidden.
   const realWins = group.windows.filter((w) => !w.no_window)
   const evalSet = realWins.length > 0 ? realWins : group.windows
-  const allHidden = evalSet.every((w) => w.hidden)
-  const someHidden = !allHidden && evalSet.some((w) => w.hidden)
+  // System-controlled windows cannot be toggled — exclude from toggle aggregation
+  const toggleable = evalSet.filter((w) => w.hidden_by !== 'system')
+  const allSystemControlled = toggleable.length === 0 && evalSet.some((w) => w.hidden_by === 'system')
+  const allHidden = toggleable.length > 0 ? toggleable.every((w) => w.hidden) : evalSet.every((w) => w.hidden)
+  const someHidden = !allHidden && (toggleable.length > 0 ? toggleable.some((w) => w.hidden) : evalSet.some((w) => w.hidden))
   const iconLetter = (group.appName[0] ?? '?').toUpperCase()
 
   return (
@@ -167,14 +173,17 @@ function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
 
       {/* Parent toggle — hides/shows all windows for this process */}
       <button
-        className={`eye-btn${allHidden ? ' is-hidden' : ''}${someHidden ? ' is-partial' : ''}`}
-        onClick={(e) => { e.stopPropagation(); onToggleAll(!allHidden) }}
+        className={`eye-btn${allHidden ? ' is-hidden' : ''}${someHidden ? ' is-partial' : ''}${allSystemControlled ? ' is-system-controlled' : ''}`}
+        onClick={allSystemControlled ? undefined : (e) => { e.stopPropagation(); onToggleAll(!allHidden) }}
+        disabled={allSystemControlled}
         title={
-          allHidden
-            ? 'Show all windows'
-            : someHidden
-              ? 'Hide remaining windows'
-              : 'Hide all windows'
+          allSystemControlled
+            ? 'Hidden (system controlled)'
+            : allHidden
+              ? 'Show all windows'
+              : someHidden
+                ? 'Hide remaining windows'
+                : 'Hide all windows'
         }
       >
         {allHidden ? <EyeSlashIcon /> : <EyeIcon />}
