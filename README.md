@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> · <a href="#security-considerations">Security Considerations</a> · <a href="#defender-antivirus">Defender / Antivirus</a> · <a href="#enterprise-deployment">Enterprise Deployment</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#notes">Notes</a> · <a href="#license">License</a>
+  <a href="#features">Features</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#notes">Notes</a> · <a href="#license">License</a> · <a href="security.md">Security</a>
 </p>
 
 ---
