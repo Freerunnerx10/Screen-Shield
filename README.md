@@ -9,7 +9,14 @@
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#notes">Notes</a> · <a href="#security-considerations">Security Considerations</a> · <a href="#acknowledgements">Acknowledgements</a> · <a href="#license">License</a>
+  <a href="https://github.com/Freerunnerx10/Screen-Shield/releases/latest"><img src="https://img.shields.io/github/v/release/Freerunnerx10/Screen-Shield?style=flat-square&label=latest%20release" alt="Latest Release" /></a>
+  <a href="https://github.com/Freerunnerx10/Screen-Shield/releases"><img src="https://img.shields.io/github/downloads/Freerunnerx10/Screen-Shield/total?style=flat-square" alt="Total Downloads" /></a>
+  <a href="https://github.com/Freerunnerx10/Screen-Shield/stargazers"><img src="https://img.shields.io/github/stars/Freerunnerx10/Screen-Shield?style=flat-square" alt="GitHub Stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Freerunnerx10/Screen-Shield?style=flat-square" alt="License" /></a>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#security-considerations">Security Considerations</a> · <a href="#notes">Notes</a> · <a href="#acknowledgements">Acknowledgements</a> · <a href="#license">License</a>
 </p>
 
 ---
@@ -30,7 +37,7 @@ Screen Shield is a Windows privacy utility that prevents selected windows and ov
 - **Intelligent window list** — hidden applications appear at the top of the list, sorted alphabetically, with visible applications below
 - **Live preview** — see exactly what screen capture software will see in real time
 - **Auto-hide watcher** — newly opened windows from protected applications are hidden automatically without manual intervention
-- **Advanced controls** — independently hide the desktop background, Task View, or the taskbar from capture
+- **Advanced controls** — independently hide the desktop background, Task View, or taskbar from capture
 - **System tray integration** — runs silently in the background with easy access via tray icon; restore windows from tray menu
 - **Flexible deployment** — choose between installer version (with desktop shortcut) or portable executable (no installation required)
 - **Session persistence** — your hidden window preferences are remembered and restored automatically when you restart the application
