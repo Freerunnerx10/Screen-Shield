@@ -28,22 +28,19 @@ Screen Shield is a Windows privacy utility that prevents selected windows and ov
 ---
 
 ## Features
-
-- **Screen capture protection** — prevents selected windows and overlays from appearing in screenshots, screen recordings, and streaming software while keeping them fully visible on your display
-- **Instant window hiding** — new windows from protected applications are hidden automatically before they become visible in capture software
-- **Chrome compatibility** — reliably hides Chrome windows in all scenarios including new tabs, detached windows, and tab-drag operations
-- **Steam compatibility** — stable hiding for Steam windows and overlays
-- **Per-window and group controls** — toggle individual windows with the eye icon, or hide all windows belonging to a process at once
-- **Intelligent window list** — hidden applications appear at the top of the list, sorted alphabetically, with visible applications below
-- **Live preview** — see exactly what screen capture software will see in real time
-- **Auto-hide watcher** — newly opened windows from protected applications are hidden automatically without manual intervention
-- **Advanced controls** — independently hide the desktop background, Task View, or taskbar from capture
-- **System tray integration** — runs silently in the background with easy access via tray icon; restore windows from tray menu
-- **Flexible deployment** — choose between installer version (with desktop shortcut) or portable executable (no installation required)
-- **Session persistence** — your hidden window preferences are remembered and restored automatically when you restart the application
-- **Clean exit** — when quitting via system tray, all previously hidden windows are automatically restored before the application closes
-- **Launch at startup** — optional setting to start Screen Shield automatically when you log into Windows
-- **Customizable appearance** — choose from four built-in themes (Default, Dark, Light, System) and switch instantly
+- **Capture Protection**: Shields selected windows and overlays from screenshots, recordings, and streams while keeping them visible on screen.
+- **Automatic Hiding**: New windows from protected apps are hidden instantly before appearing in capture software.
+- **Broad Compatibility**: Reliable hiding for Chrome, Steam, and other applications.
+- **Easy Control**: Toggle individual windows or hide all windows of a process with one click.
+- **Smart Organization**: Hidden apps appear at the top of the window list, sorted alphabetically.
+- **Live Preview**: See exactly what capture software will capture in real time.
+- **Advanced Options**: Hide desktop background, Task View, or taskbar independently.
+- **Tray Integration**: Runs silently in the system tray with quick access to restore windows.
+- **Flexible Deployment**: Choose between installer (with desktop shortcut) or portable executable.
+- **Session Persistence**: Your hidden window preferences are saved and restored on restart.
+- **Clean Exit**: All hidden windows are restored before closing when quitting via tray.
+- **Startup Launch**: Optional setting to start automatically at Windows login.
+- **Custom Themes**: Choose from Default, Dark, Light, or System themes.
 
 ---
 
