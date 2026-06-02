@@ -80,7 +80,7 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 
 ## Security Considerations
 
-See SECURITY.md for full technical security details and behavioral analysis. Screen Shield employs process injection, API hooking, persistent monitoring, and cross-process window manipulation to provide real-time screen capture protection. These techniques, while necessary for the product's core purpose, may trigger alerts in endpoint protection platforms due to behavioral similarities with potentially unwanted software. The application requires administrator privileges for full functionality, and any required antivirus exclusions must be configured manually by the user or administrator following organizational policy.
+See [SECURITY](SECURITY.md) for full technical security details and behavioral analysis. Screen Shield employs process injection, API hooking, persistent monitoring, and cross-process window manipulation to provide real-time screen capture protection. These techniques, while necessary for the product's core purpose, may trigger alerts in endpoint protection platforms due to behavioral similarities with potentially unwanted software. The application requires administrator privileges for full functionality, and any required antivirus exclusions must be configured manually by the user or administrator following organizational policy.
 
 ---
 
