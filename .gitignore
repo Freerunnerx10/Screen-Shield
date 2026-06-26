@@ -13,3 +13,7 @@ resources/*.psd
 *.log
 .DS_Store
 Thumbs.db
+
+#kilo code
+.kilo/
+
