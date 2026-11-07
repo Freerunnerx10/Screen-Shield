@@ -6,8 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 ## [Unreleased]
-### Fixed
-- **Steam windows turning black during startup** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — defer capture-affinity changes until Steam windows are shown, allowing Chromium surfaces to complete their initial paint while retaining capture exclusion.
 
 ## [1.2.0] - 2026-11-07
 ### Removed
@@ -19,7 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Keyboard-accessible application and Advanced controls** (`frontend/src/App.jsx`, `frontend/src/WindowList.jsx`) — app-group expansion and the Advanced disclosure now use semantic buttons with expanded state and accessible labels.
 
 ### Fixed
-- **Steam windows turning black when hidden from capture** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — Steam and `steamwebhelper.exe` windows retain normal rendering while remaining excluded from screen capture.
+- **Steam rendering during automatic capture exclusion** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — avoid DWM cloaking and off-screen moves, and defer in-process capture-affinity changes until Steam windows are shown, allowing Chromium to paint while keeping the windows excluded from capture.
 
 ## [1.1.3] - 2026-04-16
 ### Fixed
