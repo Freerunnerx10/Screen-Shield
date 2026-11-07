@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="SECURITY.MD">Security Considerations</a> · <a href="#notes">Notes</a> · <a href="#acknowledgements">Acknowledgements</a> · <a href="#license">License</a>
+  <a href="#features">Features</a> Â· <a href="#installation">Installation</a> Â· <a href="#usage">Usage</a> Â· <a href="SECURITY.MD">Security Considerations</a> Â· <a href="#notes">Notes</a> Â· <a href="#acknowledgements">Acknowledgements</a> Â· <a href="#license">License</a>
 </p>
 
 ---
@@ -50,8 +50,8 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 
 | Build | Description |
 |---|---|
-| **`ScreenShield_Setup_v1.1.1.exe`** | Installer (recommended) — installs to Program Files with desktop shortcut |
-| **`ScreenShield_Portable_v1.1.1.exe`** | Portable executable — no installation required |
+| **`ScreenShield-Setup-1.2.0.exe`** | Installer (recommended); installs to Program Files with desktop shortcut |
+| **`ScreenShield-Portable-1.2.0.exe`** | Portable executable; no installation required |
 
 > **NOTE:**
 > Administrator privileges are recommended. Without elevation, hiding windows owned by other users or high-integrity processes will not work.
@@ -63,7 +63,7 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 1. Launch **Screen Shield** (Run as administrator is recommended).
 2. The **Hide Applications** panel lists all visible top-level windows. Click the eye icon on any row to hide that window from capture.
 3. Click the group eye icon next to a process name to hide or restore all of its windows at once.
-4. Use the **Preview** pane at the top to confirm which windows are hidden — it shows your screen as capture software would see it.
+4. Use the **Preview** pane at the top to confirm which windows are hidden â€” it shows your screen as capture software would see it.
 5. Open the **Advanced** panel to hide the desktop background, Task View, or the taskbar from capture.
 6. Click the gear icon to open **Settings**, where you can change the theme, enable launch on startup, or reset the application.
 7. Close the window to minimise to the system tray. The auto-hide watcher continues running in the background.
@@ -73,14 +73,18 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 ## Notes
 
 - All processing is local. Screen Shield makes no network connections and transmits no data.
-- The application does not modify system files or registry keys outside of its own configuration and optional scheduled task for launch at startup.
-- Code signing is not currently applied for production builds. Signing the binaries with a trusted certificate is recommended to reduce heuristic detection by antivirus products.
+- Screen Shield does not capture keystrokes or transmit window contents. It does use local Windows APIs to change capture affinity and window settings in selected processes.
+- The installer and application startup attempt to add Microsoft Defender exclusions for the install/runtime paths and the background service and hook DLL. The startup command fails silently when blocked, and organizational policy may prohibit exclusions. Review these exclusions with your administrator; portable or development runs may leave path exclusions that should be removed when no longer needed.
+- Screen Shield uses an optional scheduled task for launch at startup and writes normal installer/uninstaller metadata to the Windows registry.
+- Production builds are currently unsigned. I may add code signing with a trusted certificate in a future release. Signing would verify the publisher and artifact integrity; it would not change the app's behavior or guarantee that security products stop flagging it.
 
 ---
 
 ## Security Considerations
 
-See [SECURITY](SECURITY.MD) for full technical security details and behavioral analysis. Screen Shield employs process injection, API hooking, persistent monitoring, and cross-process window manipulation to provide real-time screen capture protection. These techniques, while necessary for the product's core purpose, may trigger alerts in endpoint protection platforms due to behavioral similarities with potentially unwanted software. The application requires administrator privileges for full functionality, and any required antivirus exclusions must be configured manually by the user or administrator following organizational policy.
+See [SECURITY](SECURITY.MD) for the detailed review. Screen Shield requires administrator privileges for full protection, injects its hook DLL into selected processes, installs in-process WinEvent hooks, monitors process creation with ETW, and changes window display-affinity and related settings. Endpoint security products may classify this behavior as process injection, hooking, defense evasion, or potentially unwanted software, even though its purpose is to exclude selected windows from capture. The security review records `Behavior:Win32/DefenseEvasion.A!ml` as a possible Microsoft Defender heuristic label; actual detection names and outcomes vary by product, version, and policy. The Electron startup command passes `RendererCodeIntegrity` in Chromium's `--disable-features` list, but we have not verified that Electron 34.5.8 recognizes this feature name or that it changes the Windows renderer code-integrity mitigation. Do not assume this flag means the mitigation is disabled.
+
+Because the installer and startup routine attempt to add Microsoft Defender exclusions, this app may reduce Defender scanning for the excluded paths and helper binaries. Do not use or approve those exclusions on a managed device without authorization, and do not bypass your organization's endpoint-security policy.
 
 ---
 
@@ -99,4 +103,4 @@ See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for additional information.
 This project is licensed under the MIT License.
 See the [LICENSE](LICENSE) file for full details.
 
-Copyright © 2026 Freerunnerx10
+Copyright Â© 2026 Freerunnerx10
