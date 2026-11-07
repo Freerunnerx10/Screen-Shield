@@ -76,15 +76,13 @@ Download the latest version from the [GitHub Releases](https://github.com/Freeru
 - Screen Shield does not capture keystrokes or transmit window contents. It does use local Windows APIs to change capture affinity and window settings in selected processes.
 - The installer and application startup attempt to add Microsoft Defender exclusions for the install/runtime paths and the background service and hook DLL. The startup command fails silently when blocked, and organizational policy may prohibit exclusions. Review these exclusions with your administrator; portable or development runs may leave path exclusions that should be removed when no longer needed.
 - Screen Shield uses an optional scheduled task for launch at startup and writes normal installer/uninstaller metadata to the Windows registry.
-- Production builds are currently unsigned. I may add code signing with a trusted certificate in a future release. Signing would verify the publisher and artifact integrity; it would not change the app's behavior or guarantee that security products stop flagging it.
+- Production builds are currently unsigned. I may add code signing with a trusted certificate in a future release.
 
 ---
 
 ## Security Considerations
 
-See [SECURITY](SECURITY.MD) for the detailed review. Screen Shield requires administrator privileges for full protection, injects its hook DLL into selected processes, installs in-process WinEvent hooks, monitors process creation with ETW, and changes window display-affinity and related settings. Endpoint security products may classify this behavior as process injection, hooking, defense evasion, or potentially unwanted software, even though its purpose is to exclude selected windows from capture. The security review records `Behavior:Win32/DefenseEvasion.A!ml` as a possible Microsoft Defender heuristic label; actual detection names and outcomes vary by product, version, and policy. The Electron startup command passes `RendererCodeIntegrity` in Chromium's `--disable-features` list, but we have not verified that Electron 34.5.8 recognizes this feature name or that it changes the Windows renderer code-integrity mitigation. Do not assume this flag means the mitigation is disabled.
-
-Because the installer and startup routine attempt to add Microsoft Defender exclusions, this app may reduce Defender scanning for the excluded paths and helper binaries. Do not use or approve those exclusions on a managed device without authorization, and do not bypass your organization's endpoint-security policy.
+Screen Shield uses Windows process-injection and window-management techniques to keep selected windows out of screen captures. These techniques may trigger warnings from endpoint-security software, and full functionality requires administrator privileges. See [SECURITY](SECURITY.MD) for technical details.
 
 ---
 
