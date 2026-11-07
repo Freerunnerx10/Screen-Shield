@@ -58,6 +58,18 @@ fn check_and_cache_match(pid: u32) -> bool {
     names.contains(&lower)
 }
 
+fn is_render_sensitive_process(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "steam.exe" | "steamwebhelper.exe"
+    )
+}
+
+fn is_render_sensitive_pid(pid: u32) -> bool {
+    let (_, process_name) = native::get_process_info(pid);
+    is_render_sensitive_process(&process_name)
+}
+
 /// Lightweight path for windows where the INCONTEXT hook has already applied
 /// WDA_EXCLUDEFROMCAPTURE and DWM-cloaked the window at CREATE time.
 ///
@@ -91,16 +103,16 @@ fn schedule_delayed_uncloak(hwnd: HWND) {
 /// watched process is detected.
 ///
 /// Everything before the thread spawn runs synchronously in the callback
-/// thread with < 2 ms total latency:
+/// thread. Steam windows skip cloaking and off-screen movement to preserve
+/// Chromium rendering; other processes use the fast hide pipeline:
 ///
 ///  1. Atomic deduplication — if the HWND is already in PROCESSING (because
 ///     the CREATE callback already handled it), SHOW returns immediately and
 ///     vice-versa.  Whichever event arrives first wins.
 ///
-///  2. CLOAK the window via DwmSetWindowAttribute (< 0.5 ms).  This is done
-///     FIRST because DWM processes cloak on the next composition cycle with
-///     no cross-process message dispatch, whereas SetWindowPos requires the
-///     target process to handle a WM_WINDOWPOSCHANGED message.
+///  2. CLOAK the window via DwmSetWindowAttribute (< 0.5 ms). This is done
+///     before moving the window because DWM processes cloak on the next
+///     composition cycle, whereas SetWindowPos requires cross-process dispatch.
 ///
 ///  3. Save the current window rect via GetWindowRect  (< 0.1 ms).
 ///
@@ -109,11 +121,13 @@ fn schedule_delayed_uncloak(hwnd: HWND) {
 ///  5. Spawn a background thread that does the slow work:
 ///       • DLL injection + SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)
 ///       • Verify the HWND is still alive via IsWindow
-///       • Restore the saved position (only on injection success)
+///       • Restore the saved position only when injection succeeds
 ///       • Remove DWM cloak
 ///       • Remove the HWND from PROCESSING
 fn handle_window_event(hwnd: HWND, pid: u32) {
     let hwnd_u32 = hwnd.0 as usize as u32;
+    let (_, proc_name) = native::get_process_info(pid);
+    let render_sensitive = is_render_sensitive_process(&proc_name);
 
     // ── Step 1: Deduplication ──────────────────────────────────────────────
     {
@@ -131,39 +145,40 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
     // no injection required.  This is done BEFORE the off-screen move
     // because DWM processes cloak immediately, while SetWindowPos requires
     // the target process to handle the message (cross-process round-trip).
-    let cloak_val: u32 = 1;
-    let _ = unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAK,
-            &cloak_val as *const u32 as *const _,
-            std::mem::size_of::<u32>() as u32,
-        )
-    };
-
-    // ── Step 3: Save current window position (cross-process, < 0.1 ms) ───
-    let mut rect = RECT::default();
-    let restore_pos = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-        Some((rect.left, rect.top))
-    } else {
+    let restore_pos = if render_sensitive {
         None
-    };
+    } else {
+        let cloak_val: u32 = 1;
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                &cloak_val as *const u32 as *const _,
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
 
-    // ── Step 4: Move off-screen (cross-process, < 2 ms) ──────────────────
-    // Secondary safety net — even if cloak is not respected by some
-    // capture tool, the window's content is outside the visible area.
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            -32000,
-            -32000,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        )
+        let mut rect = RECT::default();
+        let restore_pos = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+            Some((rect.left, rect.top))
+        } else {
+            None
+        };
+
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        eprintln!("[SS] OFFSCR  hwnd={:#010x}", hwnd_u32);
+        restore_pos
     };
-    eprintln!("[SS] OFFSCR  hwnd={:#010x}", hwnd_u32);
 
     // ── Step 5: DLL injection + restore on a background thread ────────────
     std::thread::spawn(move || {
@@ -185,7 +200,6 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
         // composites it rather than relying on the slower OUTOFCONTEXT watcher.
         // Skip explorer.exe — it hosts system UI and enabling auto-hide on it
         // would persistently hide all future explorer.exe windows.
-        let (_, proc_name) = native::get_process_info(pid);
         if !proc_name.is_empty() && !proc_name.eq_ignore_ascii_case("explorer.exe") {
             native::Injector::apply_auto_hide_for_name(&proc_name, true);
         }
@@ -194,10 +208,8 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
         // ShowWindow call by the app) can be re-processed if needed.
         PROCESSING.lock().unwrap().remove(&hwnd_u32);
 
-        // Restore the saved position only when:
-        //  (a) injection succeeded — WDA_EXCLUDEFROMCAPTURE is now active
-        //  (b) we have a valid saved position
-        //  (c) the HWND is still alive — window wasn't destroyed during injection
+        // Restore moved windows only after protection succeeds; Steam windows
+        // are never moved by this path.
         if inject_ok {
             if let Some((x, y)) = restore_pos {
                 if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
@@ -217,19 +229,19 @@ fn handle_window_event(hwnd: HWND, pid: u32) {
             }
         }
 
-        // Remove DWM cloaking.  WDA_EXCLUDEFROMCAPTURE now applies (if
-        // injection succeeded) so the window is excluded from capture while
-        // being visible to the user.  Always uncloak — even on failure — so
-        // the window is not permanently black for the user.
-        let uncloak_val: u32 = 0;
-        let _ = unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAK,
-                &uncloak_val as *const u32 as *const _,
-                std::mem::size_of::<u32>() as u32,
-            )
-        };
+        // Remove DWM cloaking even when injection failed so the window remains
+        // visible and usable. Steam windows were never cloaked here.
+        if !render_sensitive {
+            let uncloak_val: u32 = 0;
+            let _ = unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_CLOAK,
+                    &uncloak_val as *const u32 as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                )
+            };
+        }
     });
 }
 
@@ -272,13 +284,14 @@ unsafe extern "system" fn on_window_create(
         return;
     }
 
-    // If the in-process (INCONTEXT) hook already applied WDA and cloaked the
-    // window at CREATE time, WDA just needs a few DWM cycles to propagate.
-    // Schedule a delayed uncloak — no off-screen move, preserving Chrome's
-    // window positioning for tab drags and window snapping.
+    // If the in-process hook already applied WDA, avoid the off-screen move.
+    // Non-Steam processes may need a delayed uncloak; Steam's hook does not
+    // cloak its windows, so no cleanup is needed.
     let mut affinity: u32 = 0;
     if unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) }.is_ok() && affinity != 0 {
-        schedule_delayed_uncloak(hwnd);
+        if !is_render_sensitive_pid(pid) {
+            schedule_delayed_uncloak(hwnd);
+        }
         return;
     }
 
@@ -328,10 +341,12 @@ unsafe extern "system" fn on_window_show(
     }
 
     // Same lightweight path as on_window_create: if WDA is already set by the
-    // INCONTEXT hook, just schedule a delayed uncloak — no off-screen move.
+    // INCONTEXT hook, avoid off-screen movement and only uncloak non-Steam apps.
     let mut affinity: u32 = 0;
     if unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) }.is_ok() && affinity != 0 {
-        schedule_delayed_uncloak(hwnd);
+        if !is_render_sensitive_pid(pid) {
+            schedule_delayed_uncloak(hwnd);
+        }
         return;
     }
 

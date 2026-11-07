@@ -1,0 +1,28 @@
+name: Changelog check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require changelog entry for application changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          application_files="$(printf '%s\n' "$changed_files" | grep -E '^(main\.js|preload[^/]*\.js|splash\.html|installer\.nsh|build\.ps1|vite\.config\.js|app\.manifest|package(-lock)?\.json|frontend/|native-backend/|resources/)' || true)"
+
+          if [ -n "$application_files" ] && ! printf '%s\n' "$changed_files" | grep -qx 'CHANGELOG.md'; then
+            echo "Application changes require a matching CHANGELOG.md entry."
+            exit 1
+          fi

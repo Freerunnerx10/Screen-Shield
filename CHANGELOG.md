@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+## [1.2.0] - 2026-11-07
+### Fixed
+- **Steam windows turning black when hidden from capture** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — Steam and `steamwebhelper.exe` windows retain normal rendering while remaining excluded from screen capture.
+
 ## [1.1.3] - 2026-04-16
 ### Fixed
 - **System-controlled state not clearing when external app removes protection** (`frontend/src/App.jsx`) — when an application (e.g. Discord) disabled its own "hide from screen capture" feature, ScreenShield continued to show the window as "system controlled hidden" with a locked toggle until fully restarted. **Root cause:** the state merge logic in both the refresh and background poll paths used `live.hidden_by ?? p.hidden_by ?? null`, which falls back to the previous React state when the backend returns `null` — since `null ?? 'system'` evaluates to `'system'`, the stale value was never cleared. Additionally, when the system-controlled flag did clear, `p.hidden` remained `true` (force-set while system-controlled), keeping the window visually hidden. **Fix:** changed to `live.hidden_by ?? null` so the backend value is always authoritative, and added transition logic so that when `hidden_by` changes from `'system'` to `null`, the window reverts to the live OS hidden state instead of the stale forced value.

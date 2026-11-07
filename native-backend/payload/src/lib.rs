@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::{
@@ -128,6 +129,19 @@ static HOOK_HANDLE: AtomicUsize = AtomicUsize::new(0);
 /// matches a hardcoded whitelist (currently just `MultitaskingViewFrame`).
 /// Used for explorer.exe where the blanket hook would hide system UI.
 static EXPLORER_MODE: AtomicBool = AtomicBool::new(false);
+static STEAM_RENDER_PROCESS: OnceLock<bool> = OnceLock::new();
+
+fn is_steam_render_process() -> bool {
+    *STEAM_RENDER_PROCESS.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("steam.exe")
+                    || name.eq_ignore_ascii_case("steamwebhelper.exe")
+            })
+    })
+}
 
 /// Check whether WDA_EXCLUDEFROMCAPTURE is active on the given window.
 unsafe fn is_wda_active(hwnd: HWND) -> bool {
@@ -284,6 +298,12 @@ unsafe extern "system" fn in_process_hook(
             "WDA applied: hwnd={:#010x} result={:?} wda_was_set={} wda_now={}",
             hwnd.0 as u32, wda_result, wda_was_set, wda_now
         ));
+        return;
+    }
+
+    // Steam's Chromium surfaces can stop repainting when temporarily DWM-cloaked.
+    // WDA still excludes them from capture without interrupting their rendering.
+    if is_steam_render_process() {
         return;
     }
 
