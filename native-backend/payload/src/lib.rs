@@ -268,6 +268,13 @@ unsafe extern "system" fn in_process_hook(
         return;
     }
 
+    // Let the out-of-context watcher apply affinity after Steam's window is
+    // shown. Applying it synchronously during window creation can interrupt
+    // Chromium's initial paint and leave the surface black.
+    if is_steam_render_process() {
+        return;
+    }
+
     // ── Events other than CREATE / SHOW ─────────────────────────────────
     // For LOCATIONCHANGE, REORDER, STATECHANGE, etc.: lightweight WDA
     // re-verify.  During Chrome tab-drag operations LOCATIONCHANGE fires on
@@ -298,12 +305,6 @@ unsafe extern "system" fn in_process_hook(
             "WDA applied: hwnd={:#010x} result={:?} wda_was_set={} wda_now={}",
             hwnd.0 as u32, wda_result, wda_was_set, wda_now
         ));
-        return;
-    }
-
-    // Steam's Chromium surfaces can stop repainting when temporarily DWM-cloaked.
-    // WDA still excludes them from capture without interrupting their rendering.
-    if is_steam_render_process() {
         return;
     }
 

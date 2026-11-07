@@ -284,6 +284,12 @@ unsafe extern "system" fn on_window_create(
         return;
     }
 
+    // Steam's in-process hook defers affinity until SHOW so Chromium can paint
+    // the initial frame. Let the out-of-context SHOW callback handle this HWND.
+    if is_render_sensitive_pid(pid) {
+        return;
+    }
+
     // If the in-process hook already applied WDA, avoid the off-screen move.
     // Non-Steam processes may need a delayed uncloak; Steam's hook does not
     // cloak its windows, so no cleanup is needed.

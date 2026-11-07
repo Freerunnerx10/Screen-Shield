@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 ## [Unreleased]
+### Fixed
+- **Steam windows turning black during startup** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — defer capture-affinity changes until Steam windows are shown, allowing Chromium surfaces to complete their initial paint while retaining capture exclusion.
 
 ## [1.2.0] - 2026-11-07
 ### Removed
