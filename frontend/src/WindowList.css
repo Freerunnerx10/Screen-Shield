@@ -46,7 +46,6 @@
   align-items: center;
   gap: 11px;
   padding: 9px 12px;
-  cursor: pointer;
   user-select: none;
   transition: background 0.1s;
 }
@@ -59,22 +58,26 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* ── Chevron ─────────────────────────────────────────────── */
-.chevron-btn {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  padding: 2px;
-  border-radius: 3px;
-  cursor: pointer;
-  color: var(--text);
+.app-header-main {
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: color 0.12s;
+  flex: 1;
+  gap: 11px;
+  min-width: 0;
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.chevron-btn:hover { color: var(--text); }
+.app-header-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 
 .chevron-svg {
   width: 12px;

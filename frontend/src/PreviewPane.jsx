@@ -15,11 +15,13 @@ import './PreviewPane.css'
  * MediaStream via navigator.mediaDevices.getUserMedia using the Electron
  * desktopCapturer source ID supplied in `currentScreen.id`.
  */
-export default function PreviewPane({ screens, currentScreen, frameStream, onScreenChange }) {
+export default function PreviewPane({ screens, currentScreen, frameStream, isAppVisible = true, onScreenChange }) {
   const videoRef = useRef(null)
   const internalStreamRef = useRef(null)
+  const captureRequestRef = useRef(0)
   const containerRef = useRef(null)
-  const [paused, setPaused] = useState(false)
+  const [userPaused, setUserPaused] = useState(false)
+  const paused = userPaused || !isAppVisible
 
   // Attach a MediaStream (or null) to the <video> element
   const attachStream = useCallback((stream) => {
@@ -28,14 +30,21 @@ export default function PreviewPane({ screens, currentScreen, frameStream, onScr
     }
   }, [])
 
-  // Open a desktop-capture stream for the given desktopCapturer source ID
+  const stopCapture = useCallback(() => {
+    captureRequestRef.current += 1
+    if (internalStreamRef.current) {
+      internalStreamRef.current.getTracks().forEach((track) => track.stop())
+      internalStreamRef.current = null
+    }
+  }, [])
+
+  // Open a desktop-capture stream for the given desktopCapturer source ID.
+  // The request token prevents a late getUserMedia result from reviving a
+  // stream after the app has gone to the tray or the monitor has changed.
   const startCapture = useCallback(
     async (sourceId) => {
-      // Stop any previously running internal stream
-      if (internalStreamRef.current) {
-        internalStreamRef.current.getTracks().forEach((t) => t.stop())
-        internalStreamRef.current = null
-      }
+      stopCapture()
+      const requestId = captureRequestRef.current
 
       if (!sourceId) {
         attachStream(null)
@@ -43,8 +52,6 @@ export default function PreviewPane({ screens, currentScreen, frameStream, onScr
       }
 
       try {
-        // Uses the Electron-specific mandatory constraint syntax – the source ID
-        // is the one returned by desktopCapturer.getSources() in the main process.
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
@@ -57,61 +64,45 @@ export default function PreviewPane({ screens, currentScreen, frameStream, onScr
             },
           },
         })
+        if (requestId !== captureRequestRef.current) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
         internalStreamRef.current = stream
         attachStream(stream)
+        videoRef.current?.play().catch(() => {})
       } catch (err) {
-        // Expected in plain-browser dev (no Electron / no desktopCapturer source)
+        if (requestId !== captureRequestRef.current) return
         console.warn('PreviewPane: capture unavailable —', err.message)
         attachStream(null)
       }
     },
-    [attachStream],
+    [attachStream, stopCapture],
   )
 
   const togglePlayPause = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.paused) {
-      // Resume: restart the capture stream if it was stopped
-      if (!internalStreamRef.current && currentScreen?.id) {
-        startCapture(currentScreen.id)
-      }
-      video.play().catch(() => {})
-      setPaused(false)
-    } else {
-      // Pause: stop the capture stream to save GPU memory
-      if (internalStreamRef.current) {
-        internalStreamRef.current.getTracks().forEach((t) => t.stop())
-        internalStreamRef.current = null
-      }
-      video.pause()
-      setPaused(true)
-    }
-  }, [currentScreen, startCapture])
+    setUserPaused((value) => !value)
+  }, [])
 
   // When an external frameStream is supplied it takes precedence over
   // the internal getUserMedia approach (reserved for Rust backend frames)
   useEffect(() => {
-    setPaused(false)
-    if (frameStream) {
-      if (internalStreamRef.current) {
-        internalStreamRef.current.getTracks().forEach((t) => t.stop())
-        internalStreamRef.current = null
-      }
+    const video = videoRef.current
+    if (!isAppVisible || userPaused) {
+      attachStream(frameStream ?? null)
+      video?.pause()
+    } else if (frameStream) {
+      stopCapture()
       attachStream(frameStream)
+      video?.play().catch(() => {})
     } else {
       startCapture(currentScreen?.id ?? null)
     }
-  }, [frameStream, currentScreen, startCapture, attachStream])
 
-  // Stop the internal stream when the component unmounts
-  useEffect(() => {
     return () => {
-      if (internalStreamRef.current) {
-        internalStreamRef.current.getTracks().forEach((t) => t.stop())
-      }
+      stopCapture()
     }
-  }, [])
+  }, [frameStream, currentScreen, isAppVisible, userPaused, startCapture, stopCapture, attachStream])
 
   const hasScreens = screens.length > 1
 

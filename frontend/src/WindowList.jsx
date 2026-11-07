@@ -73,31 +73,17 @@ function deriveAppName(processName) {
 function AppIcon({ dataUrl, originalDataUrl, letter, processName }) {
   const [failed, setFailed] = useState(false)
   const [originalFailed, setOriginalFailed] = useState(false)
-  
-  // Try current icon first
-  if (dataUrl && !failed) {
-    return (
-      <img
-        className="app-icon"
-        src={dataUrl}
-        alt=""
-        draggable={false}
-        onError={() => setFailed(true)}
-      />
-    )
-  }
-  
-  // Fallback to original icon (cached from exe) when current icon unavailable
-  if (originalDataUrl && !originalFailed) {
-    return (
-      <img
-        className="app-icon"
-        src={originalDataUrl}
-        alt=""
-        draggable={false}
-        onError={() => setOriginalFailed(true)}
-      />
-    )
+
+  const usingCurrentIcon = Boolean(dataUrl && !failed)
+  const iconSource = usingCurrentIcon ? dataUrl : originalDataUrl && !originalFailed ? originalDataUrl : null
+  if (iconSource) {
+    return <img
+      className="app-icon"
+      src={iconSource}
+      alt=""
+      draggable={false}
+      onError={() => (usingCurrentIcon ? setFailed(true) : setOriginalFailed(true))}
+    />
   }
   
   // Fallback for explorer.exe when native icon extraction returned nothing:
@@ -132,7 +118,7 @@ function WindowItem({ win, onToggle }) {
 
 // ── AppHeader ─────────────────────────────────────────────────────────────
 
-function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
+function getGroupVisibilityState(group) {
   // Exclude no_window (tray-only) placeholders so the eye icon reflects only
   // windows that have actual HWNDs. When all real windows are visible the icon
   // should show the open eye even if a no_window placeholder is still hidden.
@@ -143,48 +129,58 @@ function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
   const allSystemControlled = toggleable.length === 0 && evalSet.some((w) => w.hidden_by === 'system')
   const allHidden = toggleable.length > 0 ? toggleable.every((w) => w.hidden) : evalSet.every((w) => w.hidden)
   const someHidden = !allHidden && (toggleable.length > 0 ? toggleable.some((w) => w.hidden) : evalSet.some((w) => w.hidden))
+  return { allSystemControlled, allHidden, someHidden }
+}
+
+function getGroupToggleLabels(appName, { allSystemControlled, allHidden, someHidden }) {
+  if (allSystemControlled) {
+    return { ariaLabel: `Hidden (system controlled): ${appName}`, title: 'Hidden (system controlled)' }
+  }
+  if (allHidden) {
+    return { ariaLabel: `Show all ${appName} windows`, title: 'Show all windows' }
+  }
+  if (someHidden) {
+    return { ariaLabel: `Hide remaining ${appName} windows`, title: 'Hide remaining windows' }
+  }
+  return { ariaLabel: `Hide all ${appName} windows`, title: 'Hide all windows' }
+}
+
+function AppHeader({ group, onToggleAll, isExpanded, onToggleExpand }) {
+  const { allSystemControlled, allHidden, someHidden } = getGroupVisibilityState(group)
+  const toggleLabels = getGroupToggleLabels(group.appName, { allSystemControlled, allHidden, someHidden })
   const iconLetter = (group.appName[0] ?? '?').toUpperCase()
 
   return (
-    <div className="app-header" onClick={onToggleExpand} style={{ cursor: 'pointer' }}>
-      <div className="app-icon-wrap">
-        <AppIcon
-          dataUrl={group.iconDataUrl}
-          originalDataUrl={group.originalIconDataUrl}
-          letter={iconLetter}
-          processName={group.processName}
-        />
-      </div>
-
-      {/* Name + exe name */}
-      <div className="app-info">
-        <span className="app-name">{group.appName}</span>
-        <span className="app-process">{group.processName}</span>
-      </div>
-
-      {/* Chevron collapse/expand (just left of eye) */}
+    <div className="app-header">
       <button
-        className="chevron-btn"
-        onClick={(e) => { e.stopPropagation(); onToggleExpand() }}
-        aria-label={isExpanded ? 'Collapse' : 'Expand'}
+        type="button"
+        className="app-header-main"
+        onClick={onToggleExpand}
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${group.appName}`}
       >
+        <div className="app-icon-wrap">
+          <AppIcon
+            dataUrl={group.iconDataUrl}
+            originalDataUrl={group.originalIconDataUrl}
+            letter={iconLetter}
+            processName={group.processName}
+          />
+        </div>
+        <div className="app-info">
+          <span className="app-name">{group.appName}</span>
+          <span className="app-process">{group.processName}</span>
+        </div>
         <ChevronIcon expanded={isExpanded} />
       </button>
 
-      {/* Parent toggle — hides/shows all windows for this process */}
       <button
+        type="button"
         className={`eye-btn${allHidden ? ' is-hidden' : ''}${someHidden ? ' is-partial' : ''}${allSystemControlled ? ' is-system-controlled' : ''}`}
-        onClick={allSystemControlled ? undefined : (e) => { e.stopPropagation(); onToggleAll(!allHidden) }}
+        onClick={allSystemControlled ? undefined : () => onToggleAll(!allHidden)}
         disabled={allSystemControlled}
-        title={
-          allSystemControlled
-            ? 'Hidden (system controlled)'
-            : allHidden
-              ? 'Show all windows'
-              : someHidden
-                ? 'Hide remaining windows'
-                : 'Hide all windows'
-        }
+        aria-label={toggleLabels.ariaLabel}
+        title={toggleLabels.title}
       >
         {allHidden ? <EyeSlashIcon /> : <EyeIcon />}
       </button>
@@ -286,20 +282,11 @@ export default function WindowList({ windows, loading, onToggle, onSetGroup }) {
   nonHiddenGroups.sort((a, b) =>
     a.appName.localeCompare(b.appName, undefined, { sensitivity: 'base' })
   )
+  const sortedGroups = [...hiddenGroups, ...nonHiddenGroups]
 
   return (
     <div className="window-list">
-      {hiddenGroups.map((group) => (
-        <AppContainer
-          key={group.key}
-          group={group}
-          onToggle={onToggle}
-          onSetGroup={onSetGroup}
-          isExpanded={expanded.has(group.key)}
-          onToggleExpand={() => toggleExpand(group.key)}
-        />
-      ))}
-      {nonHiddenGroups.map((group) => (
+      {sortedGroups.map((group) => (
         <AppContainer
           key={group.key}
           group={group}

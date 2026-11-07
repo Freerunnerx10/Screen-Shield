@@ -14,9 +14,7 @@
     "url":  "https://github.com/Freerunnerx10"
   },
   "homepage":  "https://github.com/Freerunnerx10/Screen-Shield",
-  "dependencies":  {
-    "electron-updater":  "^6.3.9"
-  },
+  "dependencies":  {},
   "devDependencies":  {
     "@vitejs/plugin-react":  "^4.3.4",
     "concurrently":  "^9.1.2",

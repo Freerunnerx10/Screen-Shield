@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ## [1.2.0] - 2026-11-07
+### Removed
+- **Unused electron-updater dependency** — removed the unreferenced updater package from production dependencies.
+
+### Changed
+- **Preview pauses while Screen Shield is hidden to the tray** (`frontend/src/App.jsx`, `frontend/src/PreviewPane.jsx`) — the desktop-capture stream stops while the app is hidden and resumes when restored, unless the user manually paused it.
+- **Window-list refresh and hidden-state lookups** (`frontend/src/App.jsx`, `main.js`) — avoid repeated scans while preparing the watcher and determining which hidden windows are managed by Screen Shield.
+- **Keyboard-accessible application and Advanced controls** (`frontend/src/App.jsx`, `frontend/src/WindowList.jsx`) — app-group expansion and the Advanced disclosure now use semantic buttons with expanded state and accessible labels.
+
 ### Fixed
 - **Steam windows turning black when hidden from capture** (`native-backend/injector/src/cli.rs`, `native-backend/payload/src/lib.rs`) — Steam and `steamwebhelper.exe` windows retain normal rendering while remaining excluded from screen capture.
 

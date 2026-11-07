@@ -1066,13 +1066,17 @@ ipcMain.handle('get-windows', async () => {
 
      // Annotate each window with hidden_by so the frontend can distinguish
      // ScreenShield-managed hiding from system-controlled hiding (e.g. Discord).
+     const hiddenHwnds = new Set(hiddenWindows)
+     const hiddenProcessNames = new Set(
+       hiddenProcesses.map((process) => process.name?.toLowerCase()).filter(Boolean),
+     )
      for (const w of data) {
        if (!w.hidden) {
          w.hidden_by = null
        } else {
          const procLower = (w.process_name || '').toLowerCase()
-         const ownedByHwnd = hiddenWindows.includes(w.hwnd)
-         const ownedByProcess = hiddenProcesses.some(p => p.name && p.name.toLowerCase() === procLower)
+         const ownedByHwnd = hiddenHwnds.has(w.hwnd)
+         const ownedByProcess = hiddenProcessNames.has(procLower)
          w.hidden_by = (ownedByHwnd || ownedByProcess) ? 'screenShield' : 'system'
        }
      }

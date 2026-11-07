@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import PreviewPane from './PreviewPane'
 import WindowList from './WindowList'
 import StatusBar from './StatusBar'
+import useWindowManager from './useWindowManager'
+import AppOverlays from './AppOverlays'
 
 // window.screenShield is injected by preload.js in Electron.
 // When running in a plain browser (vite dev without Electron), use stubs.
@@ -30,14 +32,6 @@ const api = window.screenShield ?? {
   onAppHidden: () => {},
   onAppShown: () => {},
 }
-
-/**
- * Stable dedup key for a list entry.
- * Real windows are keyed by their unique HWND (always > 0).
- * Process-only entries (no visible window, e.g. app in tray) are keyed by
- * their negative PID so they never collide with real HWNDs.
- */
-const entryKey = (w) => (w.no_window ? -(w.pid) : w.hwnd)
 
 // ---------------------------------------------------------------------------
 // Theme helpers — applied to document.documentElement
@@ -76,35 +70,7 @@ function applySystemThemeVars({ isDark, accentColor }) {
 }
 
 export default function App() {
-   const [windows, setWindows] = useState([])
-   const [loading, setLoading] = useState(false)
-   const [error, setError] = useState(null)
-   const [elevated, setElevated] = useState(true)
-   const [isAppVisible, setIsAppVisible] = useState(true)
-
-  // Multi-monitor state for the preview pane
-  const [screens, setScreens] = useState([])
-  const [currentScreen, setCurrentScreen] = useState(null)
-
-  // Tracks PIDs whose group eye was toggled to "all hidden".
-  // Any new window that appears for a locked PID is auto-hidden immediately.
-  const lockedPidsRef = useRef(new Set())
-  // Tracks specific HWNDs that must stay hidden (e.g. Program Manager desktop).
-  const lockedHwndsRef = useRef(new Set())
-  // Tracks lowercase process names that are locked — new windows from any PID
-  // with a matching name are auto-hidden (catches Steam chat, helper processes, etc.)
-  const lockedNamesRef = useRef(new Set())
-  // Mirrors windows state so updateWatcher (no deps) can read the current list.
-  const windowsRef = useRef([])
-
-  // Advanced panel
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [hideDesktop, setHideDesktop] = useState(false)
-  const [hideTaskbar, setHideTaskbar] = useState(false)
-  const [hideTaskView, setHideTaskView] = useState(false)
-  // Ref mirror so the background poll (no deps) can read the current toggle state.
-  const hideDesktopRef = useRef(false)
-  const hideTaskViewRef = useRef(false)
 
   // Theme & settings panel
   const [theme, setTheme] = useState(() => localStorage.getItem('ss-theme') || 'default')
@@ -116,226 +82,13 @@ export default function App() {
   const [firstLaunch, setFirstLaunch] = useState(() => localStorage.getItem('ss-setup-done') === null)
   const [logoSrc, setLogoSrc] = useState(null)
 
-  // ---------------------------------------------------------------------------
-  // Watcher management — starts/restarts the Rust --watch subprocess whenever
-  // the set of locked process names changes.
-  // ---------------------------------------------------------------------------
-  const updateWatcher = useCallback(() => {
-    // Start from the explicitly locked names, then also add process names of
-    // currently-visible child windows of locked PIDs. For example, if the user
-    // locked steam.exe, steamwebhelper.exe is automatically included — this
-    // survives watcher restarts because the names are re-derived each time
-    // rather than relying on a cache that was lost when the old process died.
-    const names = new Set([...lockedNamesRef.current])
+  const {
+    windows, setWindows, loading, error, elevated, isAppVisible, screens, currentScreen, setCurrentScreen,
+    hideDesktop, hideTaskbar, hideTaskView, refresh, toggle, setGroup, toggleHideDesktop,
+    toggleHideTaskView, toggleHideTaskbar, visibleWindows, hiddenCount,
+  } = useWindowManager(api, setLaunchAtStartup)
 
-    // Determine which locked PIDs are eligible for parent→child cascade.
-    // explorer.exe is the Windows shell host — every user-launched process has
-    // it as parent_pid, so cascading from it would sweep the entire watch list.
-    const cascadePids = new Set()
-    for (const pid of lockedPidsRef.current) {
-      const name = windowsRef.current.find((w) => w.pid === pid)?.process_name?.toLowerCase()
-      if (name && name !== 'explorer.exe') cascadePids.add(pid)
-    }
-
-    for (const w of windowsRef.current) {
-      if (!w.process_name) continue
-      const n = w.process_name.toLowerCase()
-      if (
-        lockedPidsRef.current.has(w.pid) ||
-        (w.parent_pid && cascadePids.has(w.parent_pid)) ||
-        lockedNamesRef.current.has(n)
-      ) {
-        names.add(n)
-      }
-    }
-    const nameList = [...names]
-    if (nameList.length > 0) {
-      api.startWatch?.(nameList).catch(() => {})
-    } else {
-      api.stopWatch?.().catch(() => {})
-    }
-  }, [])
-
-  // Helper: check if a window matches any active lock (PID, HWND, name, or parent PID)
-  const isWindowLocked = useCallback((w) => {
-    return (
-      lockedPidsRef.current.has(w.pid) ||
-      lockedHwndsRef.current.has(w.hwnd) ||
-      lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-      (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-    )
-  }, [])
-
-  // ---------------------------------------------------------------------------
-  // Initial data load
-  // ---------------------------------------------------------------------------
-   const refresh = useCallback(async () => {
-     // Prevent overlapping refresh calls
-     if (loading) return
-     setLoading(true)
-     setError(null)
-     try {
-      const list = await api.listWindows()
-      if (!Array.isArray(list)) { setWindows([]); return }
-
-      // On the very first load (windowsRef still empty), OS-hidden windows come from
-      // a previous Screen Shield session — restore them: rebuild lock state from the
-      // OS-reported hidden flags and keep them marked as hidden in the UI.
-      // On subsequent refreshes, OS-hidden windows without a matching lock are stale
-      // (e.g. Screen Shield restarted mid-session) — clear the WDA on those.
-      //
-      // listWindows() already excludes system processes (taskmgr, applicationframehost)
-      // and shell windows (NotifyIconOverflowWindow, Shell_TrayWnd, Progman, WorkerW),
-      // so every hidden entry here is a legitimate user-visible window.
-      const isFirstLoad = windowsRef.current.length === 0
-      const toUnhide = []
-
-      if (isFirstLoad) {
-        // Load persisted hidden processes and pre-populate lock sets so that
-        // processes hidden in a previous session are immediately re-locked,
-        // even if the backend hasn't finished re-injecting hooks yet.
-        try {
-          const persisted = await api.getHiddenProcesses?.() ?? []
-          for (const p of persisted) {
-            if (p.name) lockedNamesRef.current.add(p.name.toLowerCase())
-          }
-        } catch { /* non-fatal */ }
-
-        // Session restore — rebuild lock sets from what the OS reports as hidden.
-        // explorer.exe includes system UI like Progman (the desktop background host),
-        // the taskbar (Shell_TrayWnd), and the Alt+Tab overlay (XamlExplorerHostIslandWindow).
-        // Lock only the specific HWND for explorer.exe windows — adding explorer.exe
-        // to lockedPidsRef or lockedNamesRef would cause all File Explorer windows to
-        // be auto-hidden on the next refresh or poll.
-        let desktopWasHidden = false
-        let taskbarWasHidden = false
-        for (const w of list) {
-          if (w.no_window || !w.hidden) continue
-          // Skip system-controlled hidden windows (e.g. Discord) — do not add
-          // them to lock sets or attempt to manage their visibility.
-          if (w.hidden_by === 'system') continue
-          const isShell = w.process_name?.toLowerCase() === 'explorer.exe'
-          if (!isShell && w.pid) lockedPidsRef.current.add(w.pid)
-          if (!isShell && w.hwnd) lockedHwndsRef.current.add(w.hwnd)
-          if (!isShell && w.process_name) lockedNamesRef.current.add(w.process_name.toLowerCase())
-          if (isShell && w.title === 'Program Manager') desktopWasHidden = true
-          if (isShell && (w.class_name === 'Shell_TrayWnd' || w.class_name === 'Shell_SecondaryTrayWnd')) taskbarWasHidden = true
-          // XamlExplorerHostIslandWindow (Task View) shares the desktop compositor layer —
-          // if it was hidden, restore the combined desktop toggle.
-          if (isShell && w.class_name === 'XamlExplorerHostIslandWindow') desktopWasHidden = true
-        }
-        if (desktopWasHidden) setHideDesktop(true)
-        if (taskbarWasHidden) setHideTaskbar(true)
-      } else {
-        // Stale-hidden cleanup: unlock anything the OS has hidden that we didn't lock.
-        // Skip system-controlled windows — they are not stale, just externally managed.
-        for (const w of list) {
-          if (w.no_window || !w.hidden) continue
-          if (w.hidden_by === 'system') continue
-          if (
-            lockedPidsRef.current.has(w.pid) ||
-            lockedHwndsRef.current.has(w.hwnd) ||
-            lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-            (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-          ) continue
-          toUnhide.push(w.hwnd)
-        }
-      }
-
-      setWindows((prev) => {
-        const listMap = new Map(list.map((w) => [entryKey(w), w]))
-        const prevKeys = new Set(prev.map((w) => entryKey(w)))
-
-        // Update existing entries in original order, removing any that closed.
-        // Use the UI's hidden state (p.hidden) rather than the OS state (live.hidden)
-        // so our explicit choices are preserved and external WDA changes are ignored.
-        const updated = prev.map((p) => {
-          const live = listMap.get(entryKey(p))
-          if (!live) return null // Window closed — remove
-          // Propagate hidden_by from live backend data (never fall back to
-          // stale prev value — that would make system-controlled sticky).
-          const hiddenBy = live.hidden_by ?? null
-          // When transitioning OUT of system control, revert to the live OS
-          // state so the window isn't stuck hidden with a locked toggle.
-          const hidden = hiddenBy === 'system' ? true
-            : (p.hidden_by === 'system') ? live.hidden
-            : p.hidden
-          return { ...live, hidden, hidden_by: hiddenBy }
-        }).filter(Boolean)
-
-        const appendNew = list
-          .filter((w) => !prevKeys.has(entryKey(w)))
-          .map((w) => {
-            // System-controlled hidden windows are always shown as hidden
-            if (w.hidden_by === 'system') return { ...w, hidden: true }
-            const shouldHide =
-              lockedPidsRef.current.has(w.pid) ||
-              (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
-              lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-              (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-            return { ...w, hidden: shouldHide }
-          })
-
-        return [...updated, ...appendNew]
-      })
-
-      // On session restore, restart the watcher for all restored process names
-      // so new windows from those processes are auto-hidden immediately.
-      if (isFirstLoad && lockedNamesRef.current.size > 0) {
-        updateWatcher()
-      }
-
-       // Reset WDA on stale-hidden windows.  Fire-and-forget — the UI already
-       // reflects hidden:false so the user sees a clean state immediately.
-       // We do not unhide the window here to avoid visual flicker during refresh.
-       // Instead, we rely on the fact that the window is not locked and will be
-       // processed normally in the next poll or refresh.
-       // Note: the window may remain hidden by WDA (from the OS) but we are not
-       // locking it, so we do not want to hide it. The user may see it as not
-       // hidden in the UI but it is not capturable until the WDA is reset by
-       // a subsequent hide/unhide cycle (which happens when the window is
-       // locked and then unlocked, or via the background poll).
-       // For now, we skip the unhide to avoid flicker.
-    } catch (err) {
-      setError(err.message ?? String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [updateWatcher])
-
-  const refreshScreens = useCallback(async () => {
-    try {
-      const list = await api.getMonitors()
-      if (Array.isArray(list) && list.length > 0) {
-        setScreens(list)
-        setCurrentScreen((prev) =>
-          prev ? list.find((s) => s.id === prev.id) ?? list[0] : list[0],
-        )
-      }
-    } catch {
-      // getMonitors not available in plain browser dev — silently skip
-    }
-  }, [])
-
-  useEffect(() => {
-    refresh()
-    refreshScreens()
-    api.isElevated().then((ok) => setElevated(!!ok)).catch(() => {})
-    api.getLaunchAtStartup?.().then((v) => setLaunchAtStartup(!!v)).catch(() => {})
-  }, [refresh, refreshScreens])
-
-  // Keep windowsRef in sync so updateWatcher can read current windows without deps
-  useEffect(() => { windowsRef.current = windows }, [windows])
-
-  // Keep themeRef in sync for use inside the stable system-theme change listener
   useEffect(() => { themeRef.current = theme }, [theme])
-
-  // Keep hideDesktopRef in sync so the background poll can read the toggle state.
-  useEffect(() => { hideDesktopRef.current = hideDesktop }, [hideDesktop])
-
-  // Keep hideTaskViewRef in sync so the background poll can read the toggle state
-  // for transient Task View / Alt-Tab overlay windows (XamlExplorerHostIslandWindow).
-  useEffect(() => { hideTaskViewRef.current = hideTaskView }, [hideTaskView])
 
   // Apply theme — sets data-theme attribute (static themes) or inline CSS variables (system)
   useEffect(() => {
@@ -369,29 +122,6 @@ export default function App() {
      })
    }, [])
 
-   // Listen for app hidden/shown events to optimize resource usage
-   useEffect(() => {
-     const hiddenHandler = () => {
-       // App is hidden to tray - we can reduce polling frequency or pause non-essential work
-       console.log('[App] App hidden to tray')
-       setIsAppVisible(false)
-     }
-     
-     const shownHandler = () => {
-       // App is shown from tray - resume normal operations
-       console.log('[App] App shown from tray')
-       setIsAppVisible(true)
-     }
-     
-     const unsubscribeHidden = api.onAppHidden?.(hiddenHandler)
-     const unsubscribeShown = api.onAppShown?.(shownHandler)
-     
-     return () => {
-       unsubscribeHidden?.()
-       unsubscribeShown?.()
-     }
-   }, [])
-
   // Load logo URL for the first-launch setup screen
   useEffect(() => {
     if (firstLaunch) {
@@ -403,436 +133,6 @@ export default function App() {
     localStorage.setItem('ss-setup-done', '1')
     setFirstLaunch(false)
   }
-
-   // ---------------------------------------------------------------------------
-   // Background poll — detects new windows and removes closed ones.
-   // ---------------------------------------------------------------------------
-   useEffect(() => {
-     let pollActive = false
-     let pollInterval = null
-     
-     const startPoll = (intervalMs) => {
-       // Clear existing interval if any
-       if (pollInterval) {
-         clearInterval(pollInterval)
-       }
-       
-       pollInterval = setInterval(async () => {
-         // Skip if a previous poll is still running — prevents concurrent
-          // ScreenShieldBackgroundService.exe requests from piling up under a slow system.
-          if (pollActive) return
-         pollActive = true
-         try {
-           const list = await api.listWindows()
-           if (!Array.isArray(list)) return
- 
-           // Determine which new windows need hiding eagerly, before the React
-           // state update, so the IPC calls fire promptly regardless of when
-           // startTransition schedules the render.
-           const toAutoHide = []
-           const knownKeys = new Set(windowsRef.current.map((w) => entryKey(w)))
-           for (const w of list) {
-             if (w.no_window || knownKeys.has(entryKey(w))) continue
-             // Never auto-hide system-controlled windows (e.g. Discord)
-             if (w.hidden_by === 'system') continue
-             if (
-               lockedPidsRef.current.has(w.pid) ||
-               lockedHwndsRef.current.has(w.hwnd) ||
-               lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-               (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-             ) {
-               toAutoHide.push(w.hwnd)
-             }
-           }
- 
-            // Program Manager (Progman) is the desktop background host,
-            // controlled by the desktop toggle.
-            const toAutoUnhideDesktop = []
-            for (const w of list) {
-              const isDesktopTarget =
-                w.process_name?.toLowerCase() === 'explorer.exe' && w.title === 'Program Manager'
-              if (!isDesktopTarget) continue
-              if (hideDesktopRef.current && !w.hidden) {
-                toAutoHide.push(w.hwnd)
-              } else if (!hideDesktopRef.current && w.hidden) {
-                toAutoUnhideDesktop.push(w.hwnd)
-              }
-            }
-
-            // XamlExplorerHostIslandWindow (Task View / Alt-Tab overlay) is transient.
-            // The in-process hook handles new windows instantly, but the poll
-            // syncs any that appear while polling and unhides when toggled off.
-            const toAutoUnhideTaskView = []
-            for (const w of list) {
-              if (w.class_name !== 'XamlExplorerHostIslandWindow') continue
-              if (hideTaskViewRef.current && !w.hidden) {
-                toAutoHide.push(w.hwnd)
-              } else if (!hideTaskViewRef.current && w.hidden) {
-                toAutoUnhideTaskView.push(w.hwnd)
-              }
-            }
- 
-           // Wrap the render update in startTransition so React can yield to
-           // user interactions mid-render and avoid blocking the Windows message
-           // queue (which would trigger the OS loading cursor).
-           startTransition(() => {
-             setWindows((prev) => {
-               const listMap = new Map(list.map((w) => [entryKey(w), w]))
-               const prevKeys = new Set(prev.map((w) => entryKey(w)))
-               let anyChange = false
- 
-               // Update existing entries in their original order — preserves UI position.
-               // Closed windows are always removed; the watcher re-hides them if they reopen.
-               const updated = prev.map((p) => {
-                 const live = listMap.get(entryKey(p))
-                 if (!live) {
-                   anyChange = true
-                   return null // Window closed — remove from list
-                 }
-                 if (live.title !== p.title) anyChange = true
-                 // Propagate hidden_by from live backend data (never fall back
-                 // to stale prev value — that would make system-controlled sticky).
-                 const liveHiddenBy = live.hidden_by ?? null
-                 if (liveHiddenBy !== p.hidden_by) anyChange = true
-                 // Sync toggle-controlled windows with their respective refs
-                 // so they reflect the current toggle state on each poll.
-                 const isDesktopTarget =
-                   p.process_name?.toLowerCase() === 'explorer.exe' && p.title === 'Program Manager'
-                 const isTaskViewTarget = p.class_name === 'XamlExplorerHostIslandWindow'
-                 // When transitioning OUT of system control, revert to the live
-                 // OS state so the window isn't stuck hidden with a locked toggle.
-                 let syncHidden = (p.hidden_by === 'system' && liveHiddenBy !== 'system')
-                   ? live.hidden : p.hidden
-                 if (isDesktopTarget) syncHidden = hideDesktopRef.current
-                 else if (isTaskViewTarget) syncHidden = hideTaskViewRef.current
-                 // System-controlled windows always stay hidden and cannot be toggled
-                 if (liveHiddenBy === 'system') syncHidden = true
-                 if ((isDesktopTarget || isTaskViewTarget) && syncHidden !== p.hidden) anyChange = true
-                 return { ...p, title: live.title, hidden: syncHidden, hidden_by: liveHiddenBy }
-               }).filter(Boolean)
- 
-               // Append genuinely new windows (not seen in prev)
-               const newWins = list.filter((w) => !prevKeys.has(entryKey(w)))
-               if (newWins.length > 0) anyChange = true
- 
-               if (!anyChange) return prev
- 
-               return [
-                 ...updated,
-                 ...newWins.map((w) => {
-                   // System-controlled windows are always shown as hidden and read-only
-                   if (w.hidden_by === 'system') {
-                     return { ...w, hidden: true }
-                   }
-                   const locked =
-                     lockedPidsRef.current.has(w.pid) ||
-                     (!w.no_window && lockedHwndsRef.current.has(w.hwnd)) ||
-                     lockedNamesRef.current.has(w.process_name?.toLowerCase()) ||
-                     (w.parent_pid && lockedPidsRef.current.has(w.parent_pid))
-                   // Toggle-controlled windows: honour their respective toggle refs
-                   const isDesktopTarget =
-                     w.process_name?.toLowerCase() === 'explorer.exe' && w.title === 'Program Manager'
-                   const isTaskViewTarget = w.class_name === 'XamlExplorerHostIslandWindow'
-                   const shouldHide = !!locked ||
-                     (isDesktopTarget && hideDesktopRef.current) ||
-                     (isTaskViewTarget && hideTaskViewRef.current)
-                   return { ...w, hidden: shouldHide }
-                 }),
-               ]
-             })
-           })
- 
-           // Actually hide the new windows in the OS (fire-and-forget, outside
-           // the transition so IPC calls are not deferred).
-           for (const hwnd of toAutoHide) {
-             api.hideWindow(hwnd, false).catch(() => {})
-           }
-           // Unhide desktop windows when the toggle has been turned OFF.
-           for (const hwnd of toAutoUnhideDesktop) {
-             api.unhideWindow(hwnd, false).catch(() => {})
-           }
-           // Unhide Task View windows when the toggle has been turned OFF.
-           for (const hwnd of toAutoUnhideTaskView) {
-             api.unhideWindow(hwnd, false).catch(() => {})
-           }
-         } catch {
-           // silently ignore background poll errors
-         } finally {
-           pollActive = false
-         }
-       }, intervalMs)
-     }
-     
-     // Adjust polling interval based on app visibility
-     const intervalMs = isAppVisible ? 2000 : 10000 // 2s when visible, 10s when hidden
-     
-     // Start with appropriate interval
-     startPoll(intervalMs)
-     
-     // Cleanup on unmount
-     return () => {
-       if (pollInterval) {
-         clearInterval(pollInterval)
-       }
-     }
-   }, [isAppVisible])
-
-  // ---------------------------------------------------------------------------
-  // Toggle a single window's hide state
-  // ---------------------------------------------------------------------------
-  const toggle = useCallback(
-    async (win) => {
-      // Process-only entries have no HWND — update lock state only.
-      // The watcher will apply WDA when the process creates a window.
-      if (win.no_window) {
-        const shouldHide = !win.hidden
-        if (shouldHide) {
-          if (win.process_name) lockedNamesRef.current.add(win.process_name.toLowerCase())
-          if (win.pid) lockedPidsRef.current.add(win.pid)
-          updateWatcher()
-        } else {
-          if (win.process_name) lockedNamesRef.current.delete(win.process_name.toLowerCase())
-          if (win.pid) lockedPidsRef.current.delete(win.pid)
-          updateWatcher()
-        }
-        setWindows((prev) =>
-          prev.map((w) =>
-            w.no_window && w.pid === win.pid ? { ...w, hidden: shouldHide } : w,
-          ),
-        )
-        return
-      }
-
-      try {
-        const shouldHide = !win.hidden
-        let result
-        if (shouldHide) {
-          result = await api.hideWindow(win.hwnd, false)
-        } else {
-          result = await api.unhideWindow(win.hwnd, false)
-        }
-        if (!result.success) {
-          setError(`Failed to ${shouldHide ? 'hide' : 'unhide'} window: ${result.error}`)
-          return
-        }
-        if (shouldHide) {
-          lockedHwndsRef.current.add(win.hwnd)
-          // Individual hide locks only this specific HWND — do NOT add to
-          // lockedNamesRef or call updateWatcher.  Adding the process name here
-          // caused every future window from the same process to be auto-hidden
-          // even when the user only intended to hide one specific window.
-        } else {
-          lockedHwndsRef.current.delete(win.hwnd)
-          // Stop watching this process name if no other windows from it are locked
-          if (win.process_name) {
-            const name = win.process_name.toLowerCase()
-            const pidLocked = windows.some(
-              (w) => w.process_name?.toLowerCase() === name && lockedPidsRef.current.has(w.pid),
-            )
-            if (!pidLocked) {
-              const hwndLocked = windows.some(
-                (w) => w.hwnd !== win.hwnd && w.process_name?.toLowerCase() === name && lockedHwndsRef.current.has(w.hwnd),
-              )
-              if (!hwndLocked) {
-                lockedNamesRef.current.delete(name)
-                updateWatcher()
-              }
-            }
-          }
-        }
-        setWindows((prev) =>
-          prev.map((w) => (w.hwnd === win.hwnd ? { ...w, hidden: shouldHide } : w)),
-        )
-      } catch (err) {
-        setError(err.message ?? String(err))
-      }
-    },
-    [updateWatcher, windows],
-  )
-
-  // ---------------------------------------------------------------------------
-  // Set all windows belonging to a PID to a specific hidden state.
-  // Also tracks the process name so future windows from the same name are caught.
-  // ---------------------------------------------------------------------------
-  const setGroup = useCallback(
-    async (pid, hide) => {
-      // Process-only entries (no_window) have no HWND; only real windows get
-      // the hide/unhide IPC call.  Lock-state updates below still cover the
-      // whole group so future windows from tray-ed processes are protected.
-      const processName = windows.find((w) => w.pid === pid)?.process_name?.toLowerCase()
-      // explorer.exe is the Windows shell — every user-launched process has it
-      // as parent_pid.  Skip parent-PID matching for it so hiding File Explorer
-      // windows does not sweep unrelated apps.
-      const isShellHost = processName === 'explorer.exe'
-      const targets = windows.filter(
-        (w) => !w.no_window && !isProgMan(w) && !isTaskbarWin(w) && !isAltTabWin(w) &&
-          (w.pid === pid || (!isShellHost && w.parent_pid === pid)) &&
-          w.hidden !== hide,
-      )
-      try {
-        const results = await Promise.all(
-          targets.map((w) =>
-            hide
-              ? api.hideWindow(w.hwnd, false)
-              : api.unhideWindow(w.hwnd, false),
-          ),
-        )
-        const failed = results.find(r => !r.success)
-        if (failed) {
-          setError(`Failed to ${hide ? 'hide' : 'unhide'} process windows: ${failed.error}`)
-          return
-        }
-        setWindows((prev) =>
-          prev.map((w) =>
-            !isProgMan(w) && !isTaskbarWin(w) && !isAltTabWin(w) &&
-            (w.pid === pid || (!isShellHost && w.parent_pid === pid))
-              ? { ...w, hidden: hide } : w,
-          ),
-        )
-
-        if (hide) {
-          lockedPidsRef.current.add(pid)
-          if (processName) {
-            lockedNamesRef.current.add(processName)
-            // Persist the process name so hiding survives ScreenShield restarts
-            if (!isShellHost) api.addHiddenProcess?.(processName).catch(() => {})
-          }
-        } else {
-          lockedPidsRef.current.delete(pid)
-          if (processName) {
-            lockedNamesRef.current.delete(processName)
-            if (!isShellHost) api.removeHiddenProcess?.(processName).catch(() => {})
-          }
-          // Also remove any individually-locked HWNDs for this PID
-          for (const w of windows.filter((win) => win.pid === pid)) {
-            lockedHwndsRef.current.delete(w.hwnd)
-          }
-        }
-
-        updateWatcher()
-      } catch (err) {
-        setError(err.message ?? String(err))
-      }
-    },
-    [windows, updateWatcher],
-  )
-
-  // ---------------------------------------------------------------------------
-  // Program Manager = the desktop background; filter from the main window list
-  // ---------------------------------------------------------------------------
-  const isProgMan = (w) =>
-    w.process_name?.toLowerCase() === 'explorer.exe' && w.title === 'Program Manager'
-
-  // Taskbar windows (primary + per-monitor secondary); filtered from main list
-  const isTaskbarWin = (w) =>
-    w.class_name === 'Shell_TrayWnd' || w.class_name === 'Shell_SecondaryTrayWnd'
-
-  // Alt+Tab overlay window; filtered from main list
-  const isAltTabWin = (w) =>
-    w.class_name === 'XamlExplorerHostIslandWindow'
-
-  const toggleHideDesktop = useCallback(
-    async (checked) => {
-      setHideDesktop(checked)
-      // Target Program Manager (desktop background).  SetWindowDisplayAffinity
-      // works on Program Manager when called via the injected DLL inside
-      // explorer.exe.
-      const targets = windows.filter((w) => isProgMan(w))
-      try {
-        const results = await Promise.all(
-          targets.map((w) =>
-            checked
-              ? api.hideWindow(w.hwnd, false)
-              : api.unhideWindow(w.hwnd, false),
-          ),
-        )
-        const failed = results.find(r => !r.success)
-        if (failed) {
-          setError(`Failed to ${checked ? 'hide' : 'unhide'} desktop: ${failed.error}`)
-          return
-        }
-        setWindows((prev) =>
-          prev.map((w) => (isProgMan(w) ? { ...w, hidden: checked } : w)),
-        )
-        if (checked) targets.forEach((w) => lockedHwndsRef.current.add(w.hwnd))
-        else targets.forEach((w) => lockedHwndsRef.current.delete(w.hwnd))
-      } catch (err) {
-        setError(err.message ?? String(err))
-      }
-    },
-    [windows],
-  )
-
-  const toggleHideTaskView = useCallback(
-    async (checked) => {
-      setHideTaskView(checked)
-      try {
-        // Enable or disable the class-filtered in-process hook inside
-        // explorer.exe that targets XamlExplorerHostIslandWindow (Task View /
-        // Alt-Tab overlay).  The hook fires synchronously on window creation
-        // so it catches the transient overlay before DWM composites a frame.
-        const result = await api.enableExplorerHook(checked)
-        if (result && !result.success) {
-          setError(`Failed to ${checked ? 'enable' : 'disable'} Task View hiding: ${result.error}`)
-          return
-        }
-        // Also hide/unhide any XamlExplorerHostIslandWindow windows that already exist
-        const targets = windows.filter((w) => isAltTabWin(w))
-        if (targets.length > 0) {
-          await Promise.all(
-            targets.map((w) =>
-              checked
-                ? api.hideWindow(w.hwnd, false)
-                : api.unhideWindow(w.hwnd, false),
-            ),
-          )
-        }
-        setWindows((prev) =>
-          prev.map((w) => (isAltTabWin(w) ? { ...w, hidden: checked } : w)),
-        )
-      } catch (err) {
-        setError(err.message ?? String(err))
-      }
-    },
-    [windows],
-  )
-
-  const toggleHideTaskbar = useCallback(
-    async (checked) => {
-      setHideTaskbar(checked)
-      const targets = windows.filter(isTaskbarWin)
-      try {
-        const results = await Promise.all(
-          targets.map((w) =>
-            checked
-              ? api.hideWindow(w.hwnd, false)
-              : api.unhideWindow(w.hwnd, false),
-          ),
-        )
-        const failed = results.find(r => !r.success)
-        if (failed) {
-          setError(`Failed to ${checked ? 'hide' : 'unhide'} taskbar: ${failed.error}`)
-          return
-        }
-        setWindows((prev) =>
-          prev.map((w) => (isTaskbarWin(w) ? { ...w, hidden: checked } : w)),
-        )
-        if (checked) targets.forEach((w) => lockedHwndsRef.current.add(w.hwnd))
-        else targets.forEach((w) => lockedHwndsRef.current.delete(w.hwnd))
-      } catch (err) {
-        setError(err.message ?? String(err))
-      }
-    },
-    [windows],
-  )
-
-  // Exclude Program Manager, taskbar, and Alt+Tab overlay from the main window list —
-  // they are controlled via the Advanced panel toggles, not the per-app eye buttons.
-  const visibleWindows = windows.filter((w) => !isProgMan(w) && !isTaskbarWin(w) && !isAltTabWin(w))
-  // Count only real (non-placeholder) user-facing windows that are actively hidden.
-  // Excludes no_window tray placeholders and the desktop (ProgMan) so the number
-  // reflects exactly what the user can see toggled in the UI.
-  const hiddenCount = visibleWindows.filter((w) => w.hidden && !w.no_window).length
 
   return (
     <div className="app">
@@ -866,6 +166,7 @@ export default function App() {
           <PreviewPane
             screens={screens}
             currentScreen={currentScreen}
+            isAppVisible={isAppVisible}
             onScreenChange={setCurrentScreen}
           />
         </section>
@@ -897,7 +198,13 @@ export default function App() {
 
           {/* ── Advanced Settings ──────────────────────────── */}
           <div className="advanced-panel">
-            <div className="advanced-header" onClick={() => setAdvancedOpen((o) => !o)}>
+            <button
+              type="button"
+              className="advanced-header"
+              aria-expanded={advancedOpen}
+              aria-controls="advanced-options"
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
               <svg
                 className={`advanced-chevron${advancedOpen ? ' is-open' : ''}`}
                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -906,9 +213,8 @@ export default function App() {
                 <polyline points="9 18 15 12 9 6" />
               </svg>
               Advanced
-            </div>
-            {advancedOpen && (
-              <div className="advanced-body">
+            </button>
+            <div id="advanced-options" className="advanced-body" hidden={!advancedOpen}>
                 <label className="advanced-option">
                   <input
                     type="checkbox"
@@ -939,8 +245,7 @@ export default function App() {
                     Hide Task View and Alt+Tab from screen capture
                   </span>
                 </label>
-              </div>
-            )}
+            </div>
           </div>
         </section>
       </div>
@@ -948,139 +253,19 @@ export default function App() {
       {/* ── Footer: status bar ────────────────────────────────── */}
       <StatusBar hiddenCount={hiddenCount} hideDesktop={hideDesktop} hideTaskbar={hideTaskbar} hideTaskView={hideTaskView} />
 
-      {/* ── Settings overlay ──────────────────────────────────── */}
-      {settingsOpen && (
-        <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="settings-header">
-              <span className="settings-title">Settings</span>
-              <button className="settings-close-btn" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-            <div className="settings-body">
-              <p className="settings-section-label">Theme</p>
-              <div className="theme-options">
-                {[
-                  { id: 'default', label: 'Default', desc: 'Black & red' },
-                  { id: 'dark',    label: 'Dark',    desc: 'Neutral dark, blue accent' },
-                  { id: 'light',   label: 'Light',   desc: 'Light mode' },
-                  { id: 'system',  label: 'System',  desc: 'Follows Windows theme & accent colour' },
-                ].map(({ id, label, desc }) => (
-                  <button
-                    key={id}
-                    className={`theme-option-btn${theme === id ? ' active' : ''}`}
-                    onClick={() => setTheme(id)}
-                  >
-                    <span className={`theme-option-swatch theme-swatch-${id}`} />
-                    <span className="theme-option-text">
-                      <span className="theme-option-name">{label}</span>
-                      <span className="theme-option-desc">{desc}</span>
-                    </span>
-                    {theme === id && (
-                      <svg className="theme-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <div className="settings-startup-section">
-                <p className="settings-section-label">Startup</p>
-                <label className="settings-toggle-label">
-                  <input
-                    type="checkbox"
-                    className="settings-toggle-checkbox"
-                    checked={launchAtStartup}
-                    onChange={async (e) => {
-                      const enabled = e.target.checked
-                      setLaunchAtStartup(enabled)
-                      try {
-                        const result = await api.setLaunchAtStartup?.(enabled)
-                        if (result && !result.success) {
-                          // Revert the toggle only if the operation was confirmed to have failed
-                          setLaunchAtStartup(!enabled)
-                          console.error('Failed to update startup setting:', result.error)
-                        }
-                      } catch (error) {
-                        // Revert the toggle only if the operation was confirmed to have failed
-                        setLaunchAtStartup(!enabled)
-                        console.error('Failed to update startup setting:', error)
-                      }
-                    }}
-                  />
-                  <span className="settings-toggle-text">Launch ScreenShield on Windows startup</span>
-                </label>
-              </div>
-              <div className="settings-reset-section">
-                <p className="settings-section-label">Reset</p>
-                <button
-                  className="settings-reset-btn"
-                  onClick={async () => {
-                    // Restore every hidden window in the OS before wiping state
-                    const toUnhide = windows.filter((w) => !w.no_window && w.hidden)
-                    await Promise.allSettled(toUnhide.map((w) => api.unhideWindow(w.hwnd, false)))
-                    // Stop the auto-hide watcher so no window is re-hidden after reload
-                    api.stopWatch?.().catch(() => {})
-                    // Delete on-disk config; onResetSettings listener clears localStorage and reloads
-                    api.resetSettings?.().catch(() => {
-                      localStorage.removeItem('ss-setup-done')
-                      localStorage.removeItem('ss-theme')
-                      window.location.reload()
-                    })
-                  }}
-                >
-                  Reset
-                </button>
-                <p className="settings-reset-note">Restores all hidden windows, stops the auto-hide watcher, clears saved preferences, and re-shows the setup screen on next load.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── First-launch setup overlay ─────────────────────────── */}
-      {firstLaunch && (
-        <div className="setup-overlay">
-          <div className="setup-container">
-            {logoSrc && <img className="setup-logo" src={logoSrc} alt="Screen Shield" />}
-            <p className="setup-brand">SCREEN SHIELD</p>
-            <p className="setup-heading">Choose your theme</p>
-            <p className="setup-sub">You can change this later from the settings icon.</p>
-            <div className="setup-theme-grid">
-              {[
-                { id: 'default', label: 'Default', desc: 'Black & red' },
-                { id: 'dark',    label: 'Dark',    desc: 'Neutral dark' },
-                { id: 'light',   label: 'Light',   desc: 'Light mode' },
-                { id: 'system',  label: 'System',  desc: 'Follows Windows' },
-              ].map(({ id, label, desc }) => (
-                <button
-                  key={id}
-                  className={`setup-theme-btn${theme === id ? ' active' : ''}`}
-                  onClick={() => setTheme(id)}
-                >
-                  <span className={`theme-option-swatch theme-swatch-${id}`} />
-                  <span className="setup-theme-btn-text">
-                    <span className="setup-theme-btn-name">{label}</span>
-                    <span className="setup-theme-btn-desc">{desc}</span>
-                  </span>
-                  {theme === id && (
-                    <svg className="theme-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </button>
-              ))}
-            </div>
-            <button className="setup-get-started-btn" onClick={handleSetupComplete}>
-              Get Started
-            </button>
-          </div>
-        </div>
-      )}
+      <AppOverlays
+        api={api}
+        settingsOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        theme={theme}
+        onThemeChange={setTheme}
+        launchAtStartup={launchAtStartup}
+        onLaunchAtStartupChange={setLaunchAtStartup}
+        windows={windows}
+        firstLaunch={firstLaunch}
+        logoSrc={logoSrc}
+        onComplete={handleSetupComplete}
+      />
     </div>
   )
 }

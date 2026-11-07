@@ -140,8 +140,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   padding: 8px 12px;
-  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
   user-select: none;
   color: var(--text-muted);
   font-size: 11px;
@@ -152,6 +156,11 @@
 
 .advanced-header:hover {
   color: var(--text);
+}
+
+.advanced-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .advanced-chevron {
@@ -171,6 +180,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.advanced-body[hidden] {
+  display: none;
 }
 
 .advanced-option {
