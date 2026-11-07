@@ -4,9 +4,6 @@ All notable changes to Screen Shield are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
-
-## [Unreleased]
-
 ## [1.2.0] - 2026-11-07
 ### Removed
 - **Unused electron-updater dependency** — removed the unreferenced updater package from production dependencies.
